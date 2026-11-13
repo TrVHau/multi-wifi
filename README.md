@@ -42,9 +42,48 @@ C11, GTK4, GLib/GIO, libnm, NetworkManager, D-Bus, polkit, rtnetlink, nftables, 
 - `docs/ADR/`: architecture decisions
 - `prompts/PHASE-0.md`: first coding-agent prompt
 
+## Development and Build
+
+### Prerequisites
+- C11 compliant compiler (GCC 11+ or Clang 13+)
+- CMake 3.20+
+- `pkg-config`
+- GLib / GIO 2.74+ (`libglib2.0-dev` on Debian/Ubuntu, `glib2` on Arch)
+- GTK4 4.10+ (`libgtk-4-dev` on Debian/Ubuntu, `gtk4` on Arch)
+
+### Build Commands
+
+```bash
+# Configure build with testing enabled
+cmake -B build -DBUILD_TESTING=ON
+
+# Compile all targets with warnings enabled (-Wall -Wextra -Wpedantic)
+cmake --build build
+
+# Run unit tests
+ctest --test-dir build --output-on-failure --verbose
+```
+
+### Running Components (Phase 0)
+
+```bash
+# Run unprivileged GTK4 GUI
+./build/multiwifi-gui
+
+# Run system daemon stub
+./build/multiwifi-daemon
+```
+
 ## Phases
 
-0 Foundation; 1 Wi-Fi inventory; 2 path monitor; 3 privileged daemon; 4 routing transaction manager; 5 load balancing; 6 MPTCP bonding; 7 packaging and release.
+- [x] **Phase 0:** Foundation — Clean C11/GTK4 build system, logging with secret redaction, capability inspection, config schema/validation, unit tests and CI.
+- [ ] **Phase 1:** Wi-Fi inventory (read-only libnm integration).
+- [ ] **Phase 2:** Path monitor (probe uplinks, health & hysteresis).
+- [ ] **Phase 3:** System daemon (D-Bus, polkit, lifecycle).
+- [ ] **Phase 4:** Routing transaction manager (plan, verify, rollback in namespaces).
+- [ ] **Phase 5:** Load balancing (nftables, conntrack marks, policy routing).
+- [ ] **Phase 6:** Bonding (MPTCP, TUN encapsulation, remote endpoint).
+- [ ] **Phase 7:** Packaging and release.
 
 ## Constraints
 

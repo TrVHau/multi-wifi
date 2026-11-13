@@ -1,0 +1,12 @@
+# Build artifacts
+build/
+bin/
+*.o
+*.a
+*.so
+
+# Editor & temporary files
+.cache/
+compile_commands.json
+*~
+*.swp
