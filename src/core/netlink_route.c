@@ -395,6 +395,127 @@ gboolean multiwifi_netlink_del_route(int nl_fd,
     return send_and_recv_ack(nl_fd, n, error);
 }
 
+gboolean multiwifi_netlink_add_host_route(int nl_fd,
+                                          uint32_t table_id,
+                                          const gchar *dst_ip,
+                                          const gchar *gateway,
+                                          const gchar *ifname,
+                                          uint32_t metric,
+                                          GError **error)
+{
+    if (nl_fd < 0 || table_id == 0 || dst_ip == NULL || gateway == NULL || ifname == NULL) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid host route parameters");
+        return FALSE;
+    }
+
+    unsigned int ifindex = if_nametoindex(ifname);
+    if (ifindex == 0) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                    "Interface '%s' not found for host route", ifname);
+        return FALSE;
+    }
+
+    struct in_addr dst_in;
+    if (inet_pton(AF_INET, dst_ip, &dst_in) != 1) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                    "Invalid destination IPv4 address '%s'", dst_ip);
+        return FALSE;
+    }
+
+    struct in_addr gw_in;
+    if (inet_pton(AF_INET, gateway, &gw_in) != 1) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                    "Invalid gateway IPv4 address '%s'", gateway);
+        return FALSE;
+    }
+
+    char buf[MULTIWIFI_NL_BUF_SIZE];
+    memset(buf, 0, sizeof(buf));
+
+    struct nlmsghdr *n = (struct nlmsghdr *)buf;
+    n->nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+    n->nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_REPLACE;
+    n->nlmsg_type = RTM_NEWROUTE;
+
+    struct rtmsg *rtm = (struct rtmsg *)NLMSG_DATA(n);
+    rtm->rtm_family = AF_INET;
+    rtm->rtm_table = (table_id < 256) ? (uint8_t)table_id : RT_TABLE_UNSPEC;
+    rtm->rtm_protocol = RTPROT_STATIC;
+    rtm->rtm_scope = RT_SCOPE_UNIVERSE;
+    rtm->rtm_type = RTN_UNICAST;
+    rtm->rtm_dst_len = 32; /* /32 host route */
+
+    if (table_id >= 256) {
+        add_rtattr(n, sizeof(buf), RTA_TABLE, &table_id, sizeof(table_id));
+    }
+    add_rtattr(n, sizeof(buf), RTA_DST, &dst_in, sizeof(dst_in));
+    add_rtattr(n, sizeof(buf), RTA_GATEWAY, &gw_in, sizeof(gw_in));
+    add_rtattr(n, sizeof(buf), RTA_OIF, &ifindex, sizeof(ifindex));
+    if (metric > 0) {
+        add_rtattr(n, sizeof(buf), RTA_PRIORITY, &metric, sizeof(metric));
+    }
+
+    return send_and_recv_ack(nl_fd, n, error);
+}
+
+gboolean multiwifi_netlink_del_host_route(int nl_fd,
+                                          uint32_t table_id,
+                                          const gchar *dst_ip,
+                                          const gchar *gateway,
+                                          const gchar *ifname,
+                                          GError **error)
+{
+    if (nl_fd < 0 || table_id == 0 || dst_ip == NULL || gateway == NULL || ifname == NULL) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Invalid host route parameters for deletion");
+        return FALSE;
+    }
+
+    unsigned int ifindex = if_nametoindex(ifname);
+    if (ifindex == 0) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                    "Interface '%s' not found for host route deletion", ifname);
+        return FALSE;
+    }
+
+    struct in_addr dst_in;
+    if (inet_pton(AF_INET, dst_ip, &dst_in) != 1) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                    "Invalid destination IPv4 address '%s'", dst_ip);
+        return FALSE;
+    }
+
+    struct in_addr gw_in;
+    if (inet_pton(AF_INET, gateway, &gw_in) != 1) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                    "Invalid gateway IPv4 address '%s'", gateway);
+        return FALSE;
+    }
+
+    char buf[MULTIWIFI_NL_BUF_SIZE];
+    memset(buf, 0, sizeof(buf));
+
+    struct nlmsghdr *n = (struct nlmsghdr *)buf;
+    n->nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+    n->nlmsg_flags = NLM_F_REQUEST;
+    n->nlmsg_type = RTM_DELROUTE;
+
+    struct rtmsg *rtm = (struct rtmsg *)NLMSG_DATA(n);
+    rtm->rtm_family = AF_INET;
+    rtm->rtm_table = (table_id < 256) ? (uint8_t)table_id : RT_TABLE_UNSPEC;
+    rtm->rtm_scope = RT_SCOPE_UNIVERSE;
+    rtm->rtm_type = RTN_UNICAST;
+    rtm->rtm_dst_len = 32;
+
+    if (table_id >= 256) {
+        add_rtattr(n, sizeof(buf), RTA_TABLE, &table_id, sizeof(table_id));
+    }
+    add_rtattr(n, sizeof(buf), RTA_DST, &dst_in, sizeof(dst_in));
+    add_rtattr(n, sizeof(buf), RTA_GATEWAY, &gw_in, sizeof(gw_in));
+    add_rtattr(n, sizeof(buf), RTA_OIF, &ifindex, sizeof(ifindex));
+
+    return send_and_recv_ack(nl_fd, n, error);
+}
+
 gboolean multiwifi_netlink_verify_route(int nl_fd,
                                         uint32_t table_id,
                                         const gchar *gateway,

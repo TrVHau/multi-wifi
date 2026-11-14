@@ -5,6 +5,7 @@
 #include "multiwifi/core/routing_manager.h"
 #include "multiwifi/core/load_balancer.h"
 #include "multiwifi/core/firewall.h"
+#include "multiwifi/core/bonding_client.h"
 #include "multiwifi/version.h"
 #include <polkit/polkit.h>
 #include <string.h>
@@ -94,6 +95,7 @@ struct _MultiWifiDaemonService {
     MultiWifiRoutingManager *routing_mgr;
     MultiWifiScheduler *scheduler;
     MultiWifiFirewall *firewall;
+    MultiWifiBondingClient *bonding_client;
     GDBusNodeInfo *node_info;
 };
 
@@ -260,14 +262,29 @@ static void handle_method_call(GDBusConnection *connection,
     } else if (g_strcmp0(method_name, "GetStatus") == 0) {
         gboolean is_active = multiwifi_routing_manager_is_active(self->routing_mgr);
         gboolean fw_active = multiwifi_firewall_is_active(self->firewall);
+        MultiWifiBondingState bstate = multiwifi_bonding_client_get_state(self->bonding_client);
+        gboolean bonding_active = (bstate == MULTIWIFI_BONDING_STATE_CONNECTED);
         guint eligible_paths = multiwifi_scheduler_get_eligible_count(self->scheduler);
+
+        const gchar *mode_str = "idle";
+        if (is_active) {
+            mode_str = "load_balancing";
+        } else if (bonding_active) {
+            mode_str = "bonding";
+        }
+
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
         g_variant_builder_add(&b, "{sv}", "version", g_variant_new_string(MULTIWIFI_VERSION_STRING));
-        g_variant_builder_add(&b, "{sv}", "mode", g_variant_new_string(is_active ? "load_balancing" : "idle"));
+        g_variant_builder_add(&b, "{sv}", "mode", g_variant_new_string(mode_str));
         g_variant_builder_add(&b, "{sv}", "daemon_running", g_variant_new_boolean(TRUE));
         g_variant_builder_add(&b, "{sv}", "routing_active", g_variant_new_boolean(is_active));
         g_variant_builder_add(&b, "{sv}", "firewall_active", g_variant_new_boolean(fw_active));
+        g_variant_builder_add(&b, "{sv}", "bonding_active", g_variant_new_boolean(bonding_active));
+        g_variant_builder_add(&b, "{sv}", "bonding_state", g_variant_new_string(multiwifi_bonding_client_state_to_string(bstate)));
+        g_variant_builder_add(&b, "{sv}", "bonding_mptcp", g_variant_new_boolean(multiwifi_bonding_client_is_mptcp(self->bonding_client)));
+        const gchar *vip = multiwifi_bonding_client_get_virtual_ip(self->bonding_client);
+        g_variant_builder_add(&b, "{sv}", "bonding_virtual_ip", g_variant_new_string(vip ? vip : ""));
         g_variant_builder_add(&b, "{sv}", "eligible_uplinks", g_variant_new_uint32(eligible_paths));
         g_variant_builder_add(&b, "{sv}", "polkit_enforced", g_variant_new_boolean(self->enable_polkit));
 
@@ -280,6 +297,14 @@ static void handle_method_call(GDBusConnection *connection,
                 auth_err ? auth_err->message : "Permission denied"
             );
             g_clear_error(&auth_err);
+            return;
+        }
+
+        if (multiwifi_bonding_client_get_state(self->bonding_client) == MULTIWIFI_BONDING_STATE_CONNECTED) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_CONFLICT,
+                "Cannot start load balancing while bonding is active"
+            );
             return;
         }
 
@@ -423,9 +448,110 @@ static void handle_method_call(GDBusConnection *connection,
             return;
         }
 
-        gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StartBonding");
-        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Bonding prepared (Phase 3)");
+        if (multiwifi_routing_manager_is_active(self->routing_mgr)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_CONFLICT,
+                "Cannot start bonding while load balancing is active"
+            );
+            return;
+        }
 
+        if (multiwifi_bonding_client_get_state(self->bonding_client) == MULTIWIFI_BONDING_STATE_CONNECTED) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_BUSY,
+                "Bonding tunnel is already active"
+            );
+            return;
+        }
+
+        GVariant *profile_dict = NULL;
+        g_variant_get(parameters, "(@a{sv})", &profile_dict);
+
+        const gchar *server_host = NULL;
+        GVariant *host_v = g_variant_lookup_value(profile_dict, "server_host", G_VARIANT_TYPE_STRING);
+        if (host_v != NULL) {
+            server_host = g_variant_get_string(host_v, NULL);
+        }
+
+        const gchar *token = NULL;
+        GVariant *tok_v = g_variant_lookup_value(profile_dict, "token", G_VARIANT_TYPE_STRING);
+        if (tok_v != NULL) {
+            token = g_variant_get_string(tok_v, NULL);
+        }
+
+        guint32 server_port = 5000;
+        GVariant *port_v = g_variant_lookup_value(profile_dict, "server_port", G_VARIANT_TYPE_UINT32);
+        if (port_v != NULL) {
+            server_port = g_variant_get_uint32(port_v);
+        }
+
+        const gchar *profile_id = "default";
+        GVariant *pid_v = g_variant_lookup_value(profile_dict, "profile_id", G_VARIANT_TYPE_STRING);
+        if (pid_v != NULL) {
+            profile_id = g_variant_get_string(pid_v, NULL);
+        }
+
+        if (server_host == NULL || *server_host == '\0' || token == NULL || *token == '\0' ||
+            server_port == 0 || server_port > 65535) {
+            if (host_v) g_variant_unref(host_v);
+            if (tok_v) g_variant_unref(tok_v);
+            if (port_v) g_variant_unref(port_v);
+            if (pid_v) g_variant_unref(pid_v);
+            g_variant_unref(profile_dict);
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_INVALID_ARGUMENT,
+                "Invalid bonding profile: server_host, token, and valid server_port (1-65535) are required"
+            );
+            return;
+        }
+
+        gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StartBonding");
+        multiwifi_op_manager_update(self->op_manager, op_id, MULTIWIFI_OP_STATE_VALIDATING, 20,
+                                    "Resolving host and verifying network uplinks");
+
+        /* Find physical uplink for loop prevention */
+        GPtrArray *devs = multiwifi_inventory_dup_devices(self->inventory);
+        if (devs != NULL) {
+            for (guint i = 0; i < devs->len; i++) {
+                MultiWifiDeviceInfo *d = g_ptr_array_index(devs, i);
+                if (d->state == MULTIWIFI_DEVICE_STATE_CONNECTED &&
+                    d->ipv4_gateway != NULL && *d->ipv4_gateway != '\0') {
+                    multiwifi_bonding_client_set_uplink(self->bonding_client, d->ifname, d->ipv4_gateway);
+                    break;
+                }
+            }
+            g_ptr_array_unref(devs);
+        }
+
+        multiwifi_bonding_client_set_profile(self->bonding_client, profile_id, server_host, (uint16_t)server_port, token);
+        multiwifi_op_manager_update(self->op_manager, op_id, MULTIWIFI_OP_STATE_APPLYING, 50,
+                                    "Connecting to aggregation server and establishing TUN");
+
+        GError *start_err = NULL;
+        if (!multiwifi_bonding_client_start(self->bonding_client, &start_err)) {
+            multiwifi_op_manager_finish(self->op_manager, op_id, FALSE, NULL,
+                                        start_err ? start_err->message : "Failed to establish bonding tunnel");
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NETWORK_FAILURE,
+                start_err ? start_err->message : "Failed to establish bonding tunnel"
+            );
+            g_clear_error(&start_err);
+            if (host_v) g_variant_unref(host_v);
+            if (tok_v) g_variant_unref(tok_v);
+            if (port_v) g_variant_unref(port_v);
+            if (pid_v) g_variant_unref(pid_v);
+            g_variant_unref(profile_dict);
+            g_free(op_id);
+            return;
+        }
+
+        if (host_v) g_variant_unref(host_v);
+        if (tok_v) g_variant_unref(tok_v);
+        if (port_v) g_variant_unref(port_v);
+        if (pid_v) g_variant_unref(pid_v);
+        g_variant_unref(profile_dict);
+
+        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Bonding tunnel established successfully");
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
         g_free(op_id);
     } else if (g_strcmp0(method_name, "StopBonding") == 0) {
@@ -440,8 +566,12 @@ static void handle_method_call(GDBusConnection *connection,
         }
 
         gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StopBonding");
-        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Bonding stopped");
+        multiwifi_op_manager_update(self->op_manager, op_id, MULTIWIFI_OP_STATE_APPLYING, 50,
+                                    "Tearing down bonding tunnel and restoring routes");
 
+        multiwifi_bonding_client_stop(self->bonding_client);
+
+        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Bonding tunnel terminated cleanly");
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
         g_free(op_id);
     } else if (g_strcmp0(method_name, "SetPathWeight") == 0) {
@@ -648,6 +778,10 @@ static void multiwifi_daemon_service_dispose(GObject *object)
         }
         g_clear_object(&self->firewall);
     }
+    if (self->bonding_client != NULL) {
+        multiwifi_bonding_client_free(self->bonding_client);
+        self->bonding_client = NULL;
+    }
     if (self->scheduler != NULL) {
         multiwifi_scheduler_free(self->scheduler);
         self->scheduler = NULL;
@@ -697,6 +831,7 @@ static void multiwifi_daemon_service_init(MultiWifiDaemonService *self)
 
     self->scheduler = multiwifi_scheduler_new(MULTIWIFI_STRATEGY_WEIGHTED_ROUND_ROBIN);
     self->firewall = multiwifi_firewall_new();
+    self->bonding_client = multiwifi_bonding_client_new();
 
     /* Clean recovery of any stale firewall table from past abnormal termination */
     gboolean fw_exists = FALSE;

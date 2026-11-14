@@ -124,6 +124,48 @@ gboolean multiwifi_netlink_del_route(int nl_fd,
                                      GError **error);
 
 /**
+ * multiwifi_netlink_add_host_route:
+ * @nl_fd: Open netlink socket
+ * @table_id: Target routing table (e.g. 254 for main)
+ * @dst_ip: Host destination IPv4 (e.g. server IP)
+ * @gateway: Next-hop gateway IPv4
+ * @ifname: Outgoing interface name
+ * @metric: Route metric
+ * @error: (out)(optional): Return location for GError
+ *
+ * Adds a /32 host route via RTM_NEWROUTE.
+ *
+ * Returns: %TRUE on success, %FALSE on failure.
+ */
+gboolean multiwifi_netlink_add_host_route(int nl_fd,
+                                          uint32_t table_id,
+                                          const gchar *dst_ip,
+                                          const gchar *gateway,
+                                          const gchar *ifname,
+                                          uint32_t metric,
+                                          GError **error);
+
+/**
+ * multiwifi_netlink_del_host_route:
+ * @nl_fd: Open netlink socket
+ * @table_id: Target routing table
+ * @dst_ip: Host destination IPv4
+ * @gateway: Next-hop gateway IPv4
+ * @ifname: Outgoing interface name
+ * @error: (out)(optional): Return location for GError
+ *
+ * Deletes a /32 host route via RTM_DELROUTE.
+ *
+ * Returns: %TRUE on success, %FALSE on failure.
+ */
+gboolean multiwifi_netlink_del_host_route(int nl_fd,
+                                          uint32_t table_id,
+                                          const gchar *dst_ip,
+                                          const gchar *gateway,
+                                          const gchar *ifname,
+                                          GError **error);
+
+/**
  * multiwifi_netlink_verify_route:
  * @nl_fd: Open netlink socket
  * @table_id: Target routing table

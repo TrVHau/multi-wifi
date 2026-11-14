@@ -47,6 +47,10 @@ add_library(multiwifi-core STATIC
     src/core/routing_manager.c
     src/core/load_balancer.c
     src/core/firewall.c
+    src/core/bonding_protocol.c
+    src/core/tun_device.c
+    src/core/loop_prevention.c
+    src/core/bonding_client.c
     src/daemon/service.c
 )
 target_link_libraries(multiwifi-core PUBLIC

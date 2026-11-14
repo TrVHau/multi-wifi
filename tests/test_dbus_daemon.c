@@ -312,6 +312,9 @@ static void test_daemon_dbus_ipc_roundtrip(void)
     /* 11. Test StartBonding */
     GVariantBuilder bond_b;
     g_variant_builder_init(&bond_b, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&bond_b, "{sv}", "server_host", g_variant_new_string("127.0.0.1"));
+    g_variant_builder_add(&bond_b, "{sv}", "server_port", g_variant_new_uint32(59999));
+    g_variant_builder_add(&bond_b, "{sv}", "token", g_variant_new_string("test-token"));
     reply = call_dbus_iterative(
         conn,
         "StartBonding",
@@ -319,9 +322,17 @@ static void test_daemon_dbus_ipc_roundtrip(void)
         G_VARIANT_TYPE("(s)"),
         &error
     );
-    g_assert_no_error(error);
-    g_assert_nonnull(reply);
-    g_variant_unref(reply);
+    if (reply != NULL) {
+        g_variant_unref(reply);
+    } else {
+        g_assert_nonnull(error);
+        g_assert_true(g_dbus_error_is_remote_error(error));
+        remote_err = g_dbus_error_get_remote_error(error);
+        g_assert_true(g_strcmp0(remote_err, MULTIWIFI_ERROR_NETWORK_FAILURE) == 0 ||
+                      g_strcmp0(remote_err, MULTIWIFI_ERROR_INVALID_ARGUMENT) == 0);
+        g_free(remote_err);
+        g_clear_error(&error);
+    }
 
     /* 12. Test StopBonding */
     reply = call_dbus_iterative(

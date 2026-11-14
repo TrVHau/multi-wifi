@@ -25,3 +25,7 @@ add_test(NAME test_routing_manager COMMAND test_routing_manager)
 add_executable(test_load_balancer test_load_balancer.c)
 target_link_libraries(test_load_balancer PRIVATE multiwifi-core)
 add_test(NAME test_load_balancer COMMAND test_load_balancer)
+
+add_executable(test_bonding test_bonding.c)
+target_link_libraries(test_bonding PRIVATE multiwifi-core)
+add_test(NAME test_bonding COMMAND test_bonding)

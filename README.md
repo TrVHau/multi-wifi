@@ -85,7 +85,7 @@ sudo ./build/multiwifi-daemon
 - [x] **Phase 3:** System daemon — D-Bus service (`io.github.multiwifi.Daemon`), polkit action (`io.github.multiwifi.modify`), operation lifecycle state machine (`QUEUED` -> `VALIDATING` -> `APPLYING` -> `VERIFYING` -> `SUCCEEDED` / `ROLLING_BACK` -> `FAILED`), IPC methods/signals, and systemd service unit.
 - [x] **Phase 4:** Routing transaction manager — Plan generation, conflict detection, rtnetlink socket backend, transactional journal on disk, readback verification, atomic rollback on failure, crash-recovery reconciliation, and isolated network namespace integration tests.
 - [x] **Phase 5:** Load balancing — Weighted Round-Robin (WRR) flow scheduler with GCD scaling, dynamic health penalties on packet loss/RTT, declarative nftables dataplane (`table ip multiwifi`) with source-port flow affinity, zero host firewall flushing, atomic teardown/rollback, and dynamic D-Bus path weighting.
-- [ ] **Phase 6:** Bonding (MPTCP, TUN encapsulation, remote endpoint).
+- [x] **Phase 6:** Bonding — Remote aggregation protocol (magic header, framing, authentication handshake, streaming parser with resync), TUN device encapsulation, recursive loop prevention with dedicated host routing, MPTCP transport socket with standard TCP fallback, bidirectional IP forwarding worker, and transactional lifecycle management.
 - [ ] **Phase 7:** Packaging and release.
 
 ## Constraints
