@@ -1,0 +1,650 @@
+#include "multiwifi/daemon/service.h"
+#include "multiwifi/shared/dbus_defs.h"
+#include "multiwifi/core/logging.h"
+#include "multiwifi/core/capabilities.h"
+#include "multiwifi/version.h"
+#include <polkit/polkit.h>
+#include <string.h>
+
+static const gchar s_introspection_xml[] =
+    "<node name=\"/io/github/multiwifi/Daemon\">"
+    "  <interface name=\"io.github.multiwifi.Daemon1\">"
+    "    <method name=\"GetVersion\">"
+    "      <arg name=\"version\" type=\"s\" direction=\"out\"/>"
+    "      <arg name=\"api_version\" type=\"u\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"GetCapabilities\">"
+    "      <arg name=\"capabilities\" type=\"a{sv}\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"GetDevices\">"
+    "      <arg name=\"devices\" type=\"aa{sv}\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"GetPaths\">"
+    "      <arg name=\"paths\" type=\"aa{sv}\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"GetStatus\">"
+    "      <arg name=\"status\" type=\"a{sv}\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"StartLoadBalancing\">"
+    "      <arg name=\"options\" type=\"a{sv}\" direction=\"in\"/>"
+    "      <arg name=\"operation_id\" type=\"s\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"StopLoadBalancing\">"
+    "      <arg name=\"operation_id\" type=\"s\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"StartBonding\">"
+    "      <arg name=\"profile\" type=\"a{sv}\" direction=\"in\"/>"
+    "      <arg name=\"operation_id\" type=\"s\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"StopBonding\">"
+    "      <arg name=\"operation_id\" type=\"s\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"SetPathWeight\">"
+    "      <arg name=\"device_id\" type=\"s\" direction=\"in\"/>"
+    "      <arg name=\"weight\" type=\"u\" direction=\"in\"/>"
+    "    </method>"
+    "    <method name=\"RunDiagnostics\">"
+    "      <arg name=\"operation_id\" type=\"s\" direction=\"out\"/>"
+    "    </method>"
+    "    <method name=\"GetDiagnostics\">"
+    "      <arg name=\"operation_id\" type=\"s\" direction=\"in\"/>"
+    "      <arg name=\"result\" type=\"a{sv}\" direction=\"out\"/>"
+    "    </method>"
+    "    <signal name=\"DeviceChanged\">"
+    "      <arg name=\"device\" type=\"a{sv}\"/>"
+    "    </signal>"
+    "    <signal name=\"PathChanged\">"
+    "      <arg name=\"path\" type=\"a{sv}\"/>"
+    "    </signal>"
+    "    <signal name=\"StatusChanged\">"
+    "      <arg name=\"status\" type=\"a{sv}\"/>"
+    "    </signal>"
+    "    <signal name=\"OperationProgress\">"
+    "      <arg name=\"operation_id\" type=\"s\"/>"
+    "      <arg name=\"percent\" type=\"u\"/>"
+    "      <arg name=\"message\" type=\"s\"/>"
+    "    </signal>"
+    "    <signal name=\"OperationFinished\">"
+    "      <arg name=\"operation_id\" type=\"s\"/>"
+    "      <arg name=\"success\" type=\"b\"/>"
+    "      <arg name=\"result\" type=\"a{sv}\"/>"
+    "    </signal>"
+    "    <signal name=\"Warning\">"
+    "      <arg name=\"code\" type=\"s\"/>"
+    "      <arg name=\"message\" type=\"s\"/>"
+    "    </signal>"
+    "  </interface>"
+    "</node>";
+
+struct _MultiWifiDaemonService {
+    GObject parent_instance;
+    GBusType bus_type;
+    gboolean enable_polkit;
+
+    GDBusConnection *connection;
+    guint registration_id;
+    guint owner_id;
+
+    MultiWifiInventory *inventory;
+    MultiWifiPathMonitor *path_monitor;
+    MultiWifiOpManager *op_manager;
+    GDBusNodeInfo *node_info;
+};
+
+G_DEFINE_TYPE(MultiWifiDaemonService, multiwifi_daemon_service, G_TYPE_OBJECT)
+
+static gboolean check_polkit_auth(MultiWifiDaemonService *self,
+                                  GDBusMethodInvocation *invocation,
+                                  const gchar *action_id,
+                                  GError **error)
+{
+    if (!self->enable_polkit) {
+        return TRUE;
+    }
+
+    const gchar *sender = g_dbus_method_invocation_get_sender(invocation);
+    if (sender == NULL) {
+        g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED, "Caller has no D-Bus sender identity");
+        return FALSE;
+    }
+
+    PolkitSubject *subject = polkit_system_bus_name_new(sender);
+    PolkitAuthority *authority = polkit_authority_get_sync(NULL, error);
+    if (authority == NULL) {
+        g_object_unref(subject);
+        return FALSE;
+    }
+
+    PolkitAuthorizationResult *result = polkit_authority_check_authorization_sync(
+        authority,
+        subject,
+        action_id,
+        NULL,
+        POLKIT_CHECK_AUTHORIZATION_FLAGS_ALLOW_USER_INTERACTION,
+        NULL,
+        error
+    );
+
+    g_object_unref(authority);
+    g_object_unref(subject);
+
+    if (result == NULL) {
+        return FALSE;
+    }
+
+    gboolean authorized = polkit_authorization_result_get_is_authorized(result);
+    g_object_unref(result);
+
+    if (!authorized) {
+        g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED,
+                    "Not authorized by system policy for action '%s'", action_id);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static GVariant *device_to_variant_dict(const MultiWifiDeviceInfo *d)
+{
+    GVariantBuilder b;
+    g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+
+    g_variant_builder_add(&b, "{sv}", "ifname", g_variant_new_string(d->ifname ? d->ifname : ""));
+    g_variant_builder_add(&b, "{sv}", "ifindex", g_variant_new_int32(d->ifindex));
+    g_variant_builder_add(&b, "{sv}", "hw_address", g_variant_new_string(d->hw_address ? d->hw_address : ""));
+    g_variant_builder_add(&b, "{sv}", "state", g_variant_new_string(d->state_str ? d->state_str : ""));
+    g_variant_builder_add(&b, "{sv}", "ssid", g_variant_new_string(d->ssid ? d->ssid : ""));
+    g_variant_builder_add(&b, "{sv}", "bssid", g_variant_new_string(d->bssid ? d->bssid : ""));
+    g_variant_builder_add(&b, "{sv}", "signal_strength", g_variant_new_byte(d->signal_strength));
+    g_variant_builder_add(&b, "{sv}", "frequency", g_variant_new_uint32(d->frequency));
+    g_variant_builder_add(&b, "{sv}", "ipv4_address", g_variant_new_string(d->ipv4_address ? d->ipv4_address : ""));
+    g_variant_builder_add(&b, "{sv}", "ipv4_gateway", g_variant_new_string(d->ipv4_gateway ? d->ipv4_gateway : ""));
+    g_variant_builder_add(&b, "{sv}", "ipv6_address", g_variant_new_string(d->ipv6_address ? d->ipv6_address : ""));
+    g_variant_builder_add(&b, "{sv}", "connection_uuid", g_variant_new_string(d->connection_uuid ? d->connection_uuid : ""));
+    g_variant_builder_add(&b, "{sv}", "connection_id", g_variant_new_string(d->connection_id ? d->connection_id : ""));
+    g_variant_builder_add(&b, "{sv}", "managed", g_variant_new_boolean(d->managed));
+
+    return g_variant_builder_end(&b);
+}
+
+static GVariant *path_to_variant_dict(const MultiWifiPathInfo *p)
+{
+    GVariantBuilder b;
+    g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+
+    g_variant_builder_add(&b, "{sv}", "ifname", g_variant_new_string(p->ifname ? p->ifname : ""));
+    g_variant_builder_add(&b, "{sv}", "gateway", g_variant_new_string(p->gateway ? p->gateway : ""));
+    g_variant_builder_add(&b, "{sv}", "source_ip", g_variant_new_string(p->source_ip ? p->source_ip : ""));
+    g_variant_builder_add(&b, "{sv}", "state", g_variant_new_string(multiwifi_path_state_to_string(p->state)));
+    g_variant_builder_add(&b, "{sv}", "status_reason", g_variant_new_string(p->status_reason ? p->status_reason : ""));
+    g_variant_builder_add(&b, "{sv}", "rtt_ms", g_variant_new_double(p->rtt_ms));
+    g_variant_builder_add(&b, "{sv}", "min_rtt_ms", g_variant_new_double(p->min_rtt_ms));
+    g_variant_builder_add(&b, "{sv}", "max_rtt_ms", g_variant_new_double(p->max_rtt_ms));
+    g_variant_builder_add(&b, "{sv}", "jitter_ms", g_variant_new_double(p->jitter_ms));
+    g_variant_builder_add(&b, "{sv}", "loss_percent", g_variant_new_uint32(p->packet_loss_percent));
+    g_variant_builder_add(&b, "{sv}", "eligible", g_variant_new_boolean(p->is_eligible));
+
+    return g_variant_builder_end(&b);
+}
+
+static void handle_method_call(GDBusConnection *connection,
+                               const gchar *sender,
+                               const gchar *object_path,
+                               const gchar *interface_name,
+                               const gchar *method_name,
+                               GVariant *parameters,
+                               GDBusMethodInvocation *invocation,
+                               gpointer user_data)
+{
+    (void)connection;
+    (void)sender;
+    (void)object_path;
+    (void)interface_name;
+
+    MultiWifiDaemonService *self = MULTIWIFI_DAEMON_SERVICE(user_data);
+
+    if (g_strcmp0(method_name, "GetVersion") == 0) {
+        g_dbus_method_invocation_return_value(
+            invocation,
+            g_variant_new("(su)", MULTIWIFI_VERSION_STRING, (guint32)MULTIWIFI_API_VERSION)
+        );
+    } else if (g_strcmp0(method_name, "GetCapabilities") == 0) {
+        MultiWifiCapabilities *caps = multiwifi_capabilities_new();
+        multiwifi_capabilities_probe(caps);
+
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+        g_variant_builder_add(&b, "{sv}", "kernel_version", g_variant_new_string(caps->kernel_version ? caps->kernel_version : ""));
+        g_variant_builder_add(&b, "{sv}", "mptcp_state", g_variant_new_string(multiwifi_cap_state_to_string(caps->kernel_mptcp)));
+        g_variant_builder_add(&b, "{sv}", "mptcp_details", g_variant_new_string(caps->mptcp_details ? caps->mptcp_details : ""));
+        g_variant_builder_add(&b, "{sv}", "nftables_state", g_variant_new_string(multiwifi_cap_state_to_string(caps->nftables)));
+        g_variant_builder_add(&b, "{sv}", "tun_state", g_variant_new_string(multiwifi_cap_state_to_string(caps->tun_device)));
+        g_variant_builder_add(&b, "{sv}", "network_manager_state", g_variant_new_string(multiwifi_cap_state_to_string(caps->network_manager)));
+
+        multiwifi_capabilities_free(caps);
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(@a{sv})", g_variant_builder_end(&b)));
+    } else if (g_strcmp0(method_name, "GetDevices") == 0) {
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("aa{sv}"));
+
+        GPtrArray *devices = multiwifi_inventory_dup_devices(self->inventory);
+        if (devices != NULL) {
+            for (guint i = 0; i < devices->len; i++) {
+                MultiWifiDeviceInfo *d = g_ptr_array_index(devices, i);
+                g_variant_builder_add_value(&b, device_to_variant_dict(d));
+            }
+            g_ptr_array_unref(devices);
+        }
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(@aa{sv})", g_variant_builder_end(&b)));
+    } else if (g_strcmp0(method_name, "GetPaths") == 0) {
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("aa{sv}"));
+
+        GPtrArray *paths = multiwifi_path_monitor_dup_paths(self->path_monitor);
+        if (paths != NULL) {
+            for (guint i = 0; i < paths->len; i++) {
+                MultiWifiPathInfo *p = g_ptr_array_index(paths, i);
+                g_variant_builder_add_value(&b, path_to_variant_dict(p));
+            }
+            g_ptr_array_unref(paths);
+        }
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(@aa{sv})", g_variant_builder_end(&b)));
+    } else if (g_strcmp0(method_name, "GetStatus") == 0) {
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+        g_variant_builder_add(&b, "{sv}", "version", g_variant_new_string(MULTIWIFI_VERSION_STRING));
+        g_variant_builder_add(&b, "{sv}", "mode", g_variant_new_string("idle"));
+        g_variant_builder_add(&b, "{sv}", "daemon_running", g_variant_new_boolean(TRUE));
+        g_variant_builder_add(&b, "{sv}", "polkit_enforced", g_variant_new_boolean(self->enable_polkit));
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(@a{sv})", g_variant_builder_end(&b)));
+    } else if (g_strcmp0(method_name, "StartLoadBalancing") == 0) {
+        GError *auth_err = NULL;
+        if (!check_polkit_auth(self, invocation, "io.github.multiwifi.modify", &auth_err)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NOT_AUTHORIZED,
+                auth_err ? auth_err->message : "Permission denied"
+            );
+            g_clear_error(&auth_err);
+            return;
+        }
+
+        gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StartLoadBalancing");
+        multiwifi_op_manager_update(self->op_manager, op_id, MULTIWIFI_OP_STATE_VALIDATING, 20, "Validating routing parameters");
+        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Load balancing prepared (Phase 3)");
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
+        g_free(op_id);
+    } else if (g_strcmp0(method_name, "StopLoadBalancing") == 0) {
+        GError *auth_err = NULL;
+        if (!check_polkit_auth(self, invocation, "io.github.multiwifi.modify", &auth_err)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NOT_AUTHORIZED,
+                auth_err ? auth_err->message : "Permission denied"
+            );
+            g_clear_error(&auth_err);
+            return;
+        }
+
+        gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StopLoadBalancing");
+        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Load balancing stopped");
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
+        g_free(op_id);
+    } else if (g_strcmp0(method_name, "StartBonding") == 0) {
+        GError *auth_err = NULL;
+        if (!check_polkit_auth(self, invocation, "io.github.multiwifi.modify", &auth_err)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NOT_AUTHORIZED,
+                auth_err ? auth_err->message : "Permission denied"
+            );
+            g_clear_error(&auth_err);
+            return;
+        }
+
+        gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StartBonding");
+        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Bonding prepared (Phase 3)");
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
+        g_free(op_id);
+    } else if (g_strcmp0(method_name, "StopBonding") == 0) {
+        GError *auth_err = NULL;
+        if (!check_polkit_auth(self, invocation, "io.github.multiwifi.modify", &auth_err)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NOT_AUTHORIZED,
+                auth_err ? auth_err->message : "Permission denied"
+            );
+            g_clear_error(&auth_err);
+            return;
+        }
+
+        gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StopBonding");
+        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Bonding stopped");
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
+        g_free(op_id);
+    } else if (g_strcmp0(method_name, "SetPathWeight") == 0) {
+        GError *auth_err = NULL;
+        if (!check_polkit_auth(self, invocation, "io.github.multiwifi.modify", &auth_err)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NOT_AUTHORIZED,
+                auth_err ? auth_err->message : "Permission denied"
+            );
+            g_clear_error(&auth_err);
+            return;
+        }
+
+        const gchar *dev_id = NULL;
+        guint32 weight = 0;
+        g_variant_get(parameters, "(&su)", &dev_id, &weight);
+
+        if (dev_id == NULL || *dev_id == '\0' || weight < 1 || weight > 1000) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_INVALID_ARGUMENT,
+                "Invalid parameters: weight must be between 1 and 1000 and device_id must be non-empty"
+            );
+            return;
+        }
+
+        g_info("SetPathWeight: device '%s' weight set to %u", dev_id, weight);
+        g_dbus_method_invocation_return_value(invocation, NULL);
+    } else if (g_strcmp0(method_name, "RunDiagnostics") == 0) {
+        gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "RunDiagnostics");
+        multiwifi_op_manager_update(self->op_manager, op_id, MULTIWIFI_OP_STATE_APPLYING, 50, "Executing probe cycle");
+
+        multiwifi_path_monitor_probe_all_async(self->path_monitor);
+        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Diagnostics cycle completed");
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
+        g_free(op_id);
+    } else if (g_strcmp0(method_name, "GetDiagnostics") == 0) {
+        const gchar *op_id = NULL;
+        g_variant_get(parameters, "(&s)", &op_id);
+
+        GVariant *dict = multiwifi_op_manager_to_variant(self->op_manager, op_id);
+        if (dict == NULL) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_INVALID_ARGUMENT,
+                "Unknown or expired operation ID"
+            );
+            return;
+        }
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(@a{sv})", dict));
+    } else {
+        g_dbus_method_invocation_return_error(
+            invocation, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD,
+            "Unknown method '%s' on interface '%s'", method_name, interface_name
+        );
+    }
+}
+
+static const GDBusInterfaceVTable s_interface_vtable = {
+    .method_call = handle_method_call,
+    .get_property = NULL,
+    .set_property = NULL,
+    .padding = { 0 }
+};
+
+static void on_op_progress_forward(MultiWifiOpManager *mgr,
+                                   const gchar *op_id,
+                                   guint percent,
+                                   const gchar *msg,
+                                   gpointer user_data)
+{
+    (void)mgr;
+    MultiWifiDaemonService *self = MULTIWIFI_DAEMON_SERVICE(user_data);
+    if (self->connection != NULL) {
+        g_dbus_connection_emit_signal(
+            self->connection,
+            NULL,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "OperationProgress",
+            g_variant_new("(sus)", op_id, percent, msg ? msg : ""),
+            NULL
+        );
+    }
+}
+
+static void on_op_finished_forward(MultiWifiOpManager *mgr,
+                                   const gchar *op_id,
+                                   gboolean success,
+                                   GVariant *result,
+                                   gpointer user_data)
+{
+    (void)mgr;
+    MultiWifiDaemonService *self = MULTIWIFI_DAEMON_SERVICE(user_data);
+    if (self->connection != NULL) {
+        g_dbus_connection_emit_signal(
+            self->connection,
+            NULL,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "OperationFinished",
+            g_variant_new("(sb@a{sv})", op_id, success, result),
+            NULL
+        );
+    }
+}
+
+static void on_inventory_forward(MultiWifiInventory *inv, gpointer user_data)
+{
+    MultiWifiDaemonService *self = MULTIWIFI_DAEMON_SERVICE(user_data);
+    if (self->connection != NULL && self->path_monitor != NULL) {
+        GPtrArray *devs = multiwifi_inventory_dup_devices(inv);
+        if (devs != NULL) {
+            for (guint i = 0; i < devs->len; i++) {
+                MultiWifiDeviceInfo *d = g_ptr_array_index(devs, i);
+                multiwifi_path_monitor_update_device(self->path_monitor, d);
+
+                GVariant *dict = device_to_variant_dict(d);
+                g_dbus_connection_emit_signal(
+                    self->connection,
+                    NULL,
+                    MULTIWIFI_DBUS_PATH,
+                    MULTIWIFI_DBUS_INTERFACE,
+                    "DeviceChanged",
+                    g_variant_new("(@a{sv})", dict),
+                    NULL
+                );
+            }
+            g_ptr_array_unref(devs);
+        }
+    }
+}
+
+static void on_paths_forward(MultiWifiPathMonitor *mon, gpointer user_data)
+{
+    MultiWifiDaemonService *self = MULTIWIFI_DAEMON_SERVICE(user_data);
+    if (self->connection != NULL) {
+        GPtrArray *paths = multiwifi_path_monitor_dup_paths(mon);
+        if (paths != NULL) {
+            for (guint i = 0; i < paths->len; i++) {
+                MultiWifiPathInfo *p = g_ptr_array_index(paths, i);
+                GVariant *dict = path_to_variant_dict(p);
+                g_dbus_connection_emit_signal(
+                    self->connection,
+                    NULL,
+                    MULTIWIFI_DBUS_PATH,
+                    MULTIWIFI_DBUS_INTERFACE,
+                    "PathChanged",
+                    g_variant_new("(@a{sv})", dict),
+                    NULL
+                );
+            }
+            g_ptr_array_unref(paths);
+        }
+    }
+}
+
+static void multiwifi_daemon_service_dispose(GObject *object)
+{
+    MultiWifiDaemonService *self = MULTIWIFI_DAEMON_SERVICE(object);
+    multiwifi_daemon_service_stop(self);
+
+    if (self->inventory != NULL) {
+        g_signal_handlers_disconnect_by_data(self->inventory, self);
+        g_clear_object(&self->inventory);
+    }
+    if (self->path_monitor != NULL) {
+        g_signal_handlers_disconnect_by_data(self->path_monitor, self);
+        g_clear_object(&self->path_monitor);
+    }
+    if (self->op_manager != NULL) {
+        g_signal_handlers_disconnect_by_data(self->op_manager, self);
+        g_clear_object(&self->op_manager);
+    }
+    if (self->node_info != NULL) {
+        g_dbus_node_info_unref(self->node_info);
+        self->node_info = NULL;
+    }
+
+    G_OBJECT_CLASS(multiwifi_daemon_service_parent_class)->dispose(object);
+}
+
+static void multiwifi_daemon_service_class_init(MultiWifiDaemonServiceClass *klass)
+{
+    GObjectClass *oclass = G_OBJECT_CLASS(klass);
+    oclass->dispose = multiwifi_daemon_service_dispose;
+}
+
+static void multiwifi_daemon_service_init(MultiWifiDaemonService *self)
+{
+    self->bus_type = G_BUS_TYPE_SYSTEM;
+    self->enable_polkit = TRUE;
+    self->connection = NULL;
+    self->registration_id = 0;
+    self->owner_id = 0;
+
+    self->inventory = multiwifi_inventory_new();
+    self->path_monitor = multiwifi_path_monitor_new();
+    self->op_manager = multiwifi_op_manager_new();
+
+    GError *err = NULL;
+    self->node_info = g_dbus_node_info_new_for_xml(s_introspection_xml, &err);
+    if (err != NULL) {
+        g_critical("Failed to parse D-Bus introspection XML: %s", err->message);
+        g_error_free(err);
+    }
+
+    g_signal_connect(self->op_manager, "operation-progress",
+                     G_CALLBACK(on_op_progress_forward), self);
+    g_signal_connect(self->op_manager, "operation-finished",
+                     G_CALLBACK(on_op_finished_forward), self);
+    g_signal_connect(self->inventory, "devices-changed",
+                     G_CALLBACK(on_inventory_forward), self);
+    g_signal_connect(self->path_monitor, "paths-changed",
+                     G_CALLBACK(on_paths_forward), self);
+}
+
+MultiWifiDaemonService *multiwifi_daemon_service_new(GBusType bus_type, gboolean enable_polkit)
+{
+    MultiWifiDaemonService *svc = g_object_new(MULTIWIFI_TYPE_DAEMON_SERVICE, NULL);
+    svc->bus_type = bus_type;
+    svc->enable_polkit = enable_polkit;
+    return svc;
+}
+
+static void on_bus_acquired(GDBusConnection *connection,
+                            const gchar *name,
+                            gpointer user_data)
+{
+    MultiWifiDaemonService *self = MULTIWIFI_DAEMON_SERVICE(user_data);
+    g_info("Acquired D-Bus connection for bus name '%s'", name);
+
+    self->connection = g_object_ref(connection);
+    GDBusInterfaceInfo *iface_info = self->node_info ? self->node_info->interfaces[0] : NULL;
+
+    GError *error = NULL;
+    self->registration_id = g_dbus_connection_register_object(
+        connection,
+        MULTIWIFI_DBUS_PATH,
+        iface_info,
+        &s_interface_vtable,
+        self,
+        NULL,
+        &error
+    );
+
+    if (error != NULL) {
+        g_critical("Failed to register D-Bus object: %s", error->message);
+        g_error_free(error);
+        return;
+    }
+
+    g_info("Registered D-Bus object path '%s' successfully", MULTIWIFI_DBUS_PATH);
+
+    /* Start background inventory and path monitoring */
+    multiwifi_inventory_start(self->inventory, NULL);
+    multiwifi_path_monitor_start(self->path_monitor);
+}
+
+static void on_name_acquired(GDBusConnection *connection,
+                             const gchar *name,
+                             gpointer user_data)
+{
+    (void)connection;
+    (void)user_data;
+    g_info("Acquired D-Bus service name '%s'", name);
+}
+
+static void on_name_lost(GDBusConnection *connection,
+                         const gchar *name,
+                         gpointer user_data)
+{
+    (void)connection;
+    (void)user_data;
+    g_warning("Lost or failed to acquire D-Bus service name '%s'", name);
+}
+
+gboolean multiwifi_daemon_service_start(MultiWifiDaemonService *self, GError **error)
+{
+    if (self == NULL) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Service is NULL");
+        return FALSE;
+    }
+
+    if (self->owner_id > 0) {
+        return TRUE;
+    }
+
+    self->owner_id = g_bus_own_name(
+        self->bus_type,
+        MULTIWIFI_DBUS_NAME,
+        G_BUS_NAME_OWNER_FLAGS_REPLACE,
+        on_bus_acquired,
+        on_name_acquired,
+        on_name_lost,
+        self,
+        NULL
+    );
+
+    return TRUE;
+}
+
+void multiwifi_daemon_service_stop(MultiWifiDaemonService *self)
+{
+    if (self == NULL) {
+        return;
+    }
+
+    if (self->registration_id > 0 && self->connection != NULL) {
+        g_dbus_connection_unregister_object(self->connection, self->registration_id);
+        self->registration_id = 0;
+    }
+
+    if (self->owner_id > 0) {
+        g_bus_unown_name(self->owner_id);
+        self->owner_id = 0;
+    }
+
+    g_clear_object(&self->connection);
+}
+
+GDBusConnection *multiwifi_daemon_service_get_connection(MultiWifiDaemonService *self)
+{
+    return self ? self->connection : NULL;
+}

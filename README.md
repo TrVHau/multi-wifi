@@ -64,14 +64,17 @@ cmake --build build
 ctest --test-dir build --output-on-failure --verbose
 ```
 
-### Running Components (Phase 0)
+### Running Components
 
 ```bash
 # Run unprivileged GTK4 GUI
 ./build/multiwifi-gui
 
-# Run system daemon stub
-./build/multiwifi-daemon
+# Run system daemon on session bus for testing/development (no root/polkit required)
+./build/multiwifi-daemon --session --no-polkit
+
+# Run system daemon in production (requires system bus permissions and polkit)
+sudo ./build/multiwifi-daemon
 ```
 
 ## Phases
@@ -79,7 +82,7 @@ ctest --test-dir build --output-on-failure --verbose
 - [x] **Phase 0:** Foundation — Clean C11/GTK4 build system, logging with secret redaction, capability inspection, config schema/validation, unit tests and CI.
 - [x] **Phase 1:** Wi-Fi inventory — Read-only libnm integration; detect and list adapters, connection states, signal strength, SSID, IPv4/IPv6 addresses and gateways.
 - [x] **Phase 2:** Path monitor — Independent uplink probing, unprivileged non-blocking reachability tests, RTT/jitter estimation, rolling loss calculation, hysteresis and recovery streaks.
-- [ ] **Phase 3:** System daemon (D-Bus, polkit, lifecycle).
+- [x] **Phase 3:** System daemon — D-Bus service (`io.github.multiwifi.Daemon`), polkit action (`io.github.multiwifi.modify`), operation lifecycle state machine (`QUEUED` -> `VALIDATING` -> `APPLYING` -> `VERIFYING` -> `SUCCEEDED` / `ROLLING_BACK` -> `FAILED`), IPC methods/signals, and systemd service unit.
 - [ ] **Phase 4:** Routing transaction manager (plan, verify, rollback in namespaces).
 - [ ] **Phase 5:** Load balancing (nftables, conntrack marks, policy routing).
 - [ ] **Phase 6:** Bonding (MPTCP, TUN encapsulation, remote endpoint).

@@ -1,102 +1,76 @@
 #include <glib.h>
 #include <glib-unix.h>
-#include <NetworkManager.h>
 #include "multiwifi/core/logging.h"
-#include "multiwifi/core/capabilities.h"
-#include "multiwifi/core/wifi_device.h"
-#include "multiwifi/core/path_monitor.h"
-#include "multiwifi/shared/dbus_defs.h"
+#include "multiwifi/daemon/service.h"
 #include "multiwifi/version.h"
+
+static gboolean on_sigterm(gpointer user_data)
+{
+    GMainLoop *loop = (GMainLoop *)user_data;
+    g_info("Received termination signal, shutting down MultiWiFi System Daemon...");
+    g_main_loop_quit(loop);
+    return G_SOURCE_REMOVE;
+}
 
 int main(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
-
     multiwifi_log_init("MultiWiFi-Daemon");
-    g_info("MultiWiFi System Daemon stub v%s (API %u)", MULTIWIFI_VERSION_STRING, MULTIWIFI_API_VERSION);
-    g_info("Target D-Bus bus: %s (%s)", MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH);
+    g_info("Starting MultiWiFi System Daemon v%s (API %u)", MULTIWIFI_VERSION_STRING, MULTIWIFI_API_VERSION);
 
-    MultiWifiCapabilities *caps = multiwifi_capabilities_new();
-    multiwifi_capabilities_probe(caps);
+    gboolean use_session_bus = FALSE;
+    gboolean disable_polkit = FALSE;
+    gboolean show_version = FALSE;
 
-    g_info("Host environment: %s", caps->kernel_version ? caps->kernel_version : "unknown");
-    g_info("NetworkManager state: %s", multiwifi_cap_state_to_string(caps->network_manager));
-    g_info("Kernel MPTCP state: %s (%s)", multiwifi_cap_state_to_string(caps->kernel_mptcp),
-           caps->mptcp_details ? caps->mptcp_details : "none");
+    GOptionEntry entries[] = {
+        { "session", 's', 0, G_OPTION_ARG_NONE, &use_session_bus, "Run on session bus instead of system bus (for testing)", NULL },
+        { "no-polkit", 0, 0, G_OPTION_ARG_NONE, &disable_polkit, "Disable polkit authorization enforcement (for testing)", NULL },
+        { "version", 'v', 0, G_OPTION_ARG_NONE, &show_version, "Show daemon version and exit", NULL },
+        { NULL, 0, 0, 0, NULL, NULL, NULL }
+    };
 
-    multiwifi_capabilities_free(caps);
-
-    /* Discover Wi-Fi devices and monitor path health */
     GError *error = NULL;
-    NMClient *client = nm_client_new(NULL, &error);
-    if (client != NULL) {
-        MultiWifiPathMonitor *path_mon = multiwifi_path_monitor_new();
+    GOptionContext *context = g_option_context_new("- MultiWiFi privileged networking daemon");
+    g_option_context_add_main_entries(context, entries, NULL);
+    if (!g_option_context_parse(context, &argc, &argv, &error)) {
+        g_printerr("Failed to parse arguments: %s\n", error->message);
+        g_error_free(error);
+        g_option_context_free(context);
+        return 1;
+    }
+    g_option_context_free(context);
 
-        const GPtrArray *devices = nm_client_get_devices(client);
-        guint wifi_count = 0;
-        if (devices != NULL) {
-            for (guint i = 0; i < devices->len; i++) {
-                NMDevice *dev = g_ptr_array_index(devices, i);
-                if (NM_IS_DEVICE_WIFI(dev)) {
-                    wifi_count++;
-                    NMDeviceState nm_state = nm_device_get_state(dev);
-                    MultiWifiDeviceState st = multiwifi_device_state_from_nm(nm_state);
-
-                    MultiWifiDeviceInfo *dinfo = multiwifi_device_info_new();
-                    dinfo->ifname = g_strdup(nm_device_get_iface(dev));
-                    dinfo->state = st;
-
-                    NMIPConfig *ip4 = nm_device_get_ip4_config(dev);
-                    if (ip4 != NULL) {
-                        dinfo->ipv4_gateway = g_strdup(nm_ip_config_get_gateway(ip4));
-                        GPtrArray *addrs = nm_ip_config_get_addresses(ip4);
-                        if (addrs != NULL && addrs->len > 0) {
-                            NMIPAddress *addr = g_ptr_array_index(addrs, 0);
-                            dinfo->ipv4_address = g_strdup_printf("%s/%u",
-                                nm_ip_address_get_address(addr),
-                                nm_ip_address_get_prefix(addr));
-                        }
-                    }
-
-                    multiwifi_path_monitor_update_device(path_mon, dinfo);
-
-                    g_info("Wi-Fi adapter #%u: %s [%s] (State: %s)",
-                           wifi_count,
-                           dinfo->ifname,
-                           nm_device_get_hw_address(dev) ? nm_device_get_hw_address(dev) : "no-mac",
-                           multiwifi_device_state_to_string(st));
-
-                    multiwifi_device_info_free(dinfo);
-                }
-            }
-        }
-
-        /* Run one active probe round */
-        multiwifi_path_monitor_probe_all_now(path_mon);
-
-        GPtrArray *paths = multiwifi_path_monitor_dup_paths(path_mon);
-        if (paths != NULL) {
-            for (guint i = 0; i < paths->len; i++) {
-                MultiWifiPathInfo *p = g_ptr_array_index(paths, i);
-                g_info("Path [%s]: State=%s, RTT=%.1f ms, Loss=%u%%, Reason='%s', Eligible=%s",
-                       p->ifname,
-                       multiwifi_path_state_to_string(p->state),
-                       p->rtt_ms,
-                       p->packet_loss_percent,
-                       p->status_reason ? p->status_reason : "none",
-                       p->is_eligible ? "YES" : "NO");
-            }
-            g_ptr_array_unref(paths);
-        }
-
-        g_object_unref(path_mon);
-        g_object_unref(client);
-    } else {
-        g_warning("Could not connect to NetworkManager: %s", error ? error->message : "unknown error");
-        g_clear_error(&error);
+    if (show_version) {
+        g_print("multiwifi-daemon %s (API %u)\n", MULTIWIFI_VERSION_STRING, MULTIWIFI_API_VERSION);
+        return 0;
     }
 
-    g_info("Phase 2 Path monitor verified. Exiting daemon stub cleanly.");
+    GBusType bus_type = use_session_bus ? G_BUS_TYPE_SESSION : G_BUS_TYPE_SYSTEM;
+    gboolean enable_polkit = !disable_polkit;
+
+    g_info("Target D-Bus: %s, Polkit: %s",
+           use_session_bus ? "SESSION BUS" : "SYSTEM BUS",
+           enable_polkit ? "ENABLED" : "DISABLED");
+
+    MultiWifiDaemonService *service = multiwifi_daemon_service_new(bus_type, enable_polkit);
+    if (!multiwifi_daemon_service_start(service, &error)) {
+        g_critical("Failed to start D-Bus service: %s", error ? error->message : "unknown error");
+        g_clear_error(&error);
+        g_object_unref(service);
+        return 1;
+    }
+
+    GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+    g_unix_signal_add(SIGINT, on_sigterm, loop);
+    g_unix_signal_add(SIGTERM, on_sigterm, loop);
+
+    g_info("Daemon main loop active. Serving D-Bus interface...");
+    g_main_loop_run(loop);
+
+    g_info("Cleaning up daemon service...");
+    multiwifi_daemon_service_stop(service);
+    g_object_unref(service);
+    g_main_loop_unref(loop);
+
+    g_info("MultiWiFi System Daemon stopped cleanly.");
     return 0;
 }

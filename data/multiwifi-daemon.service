@@ -1,0 +1,19 @@
+[Unit]
+Description=MultiWiFi System Daemon
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=dbus
+BusName=io.github.multiwifi.Daemon
+ExecStart=/usr/bin/multiwifi-daemon
+Restart=on-failure
+RestartSec=3s
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=false
+ProtectKernelModules=false
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

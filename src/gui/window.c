@@ -2,14 +2,20 @@
 #include "multiwifi/core/capabilities.h"
 #include "multiwifi/core/wifi_inventory.h"
 #include "multiwifi/core/path_monitor.h"
+#include "multiwifi/shared/dbus_defs.h"
 #include "multiwifi/version.h"
+#include <gio/gio.h>
 
 struct _MultiWifiWindow {
     GtkApplicationWindow parent_instance;
     GtkWidget *caps_label;
+    GtkWidget *daemon_status_lbl;
     GtkWidget *devices_box;
     MultiWifiInventory *inventory;
     MultiWifiPathMonitor *path_monitor;
+    guint bus_watcher_id;
+    GDBusConnection *system_bus;
+    gboolean daemon_connected;
 };
 
 G_DEFINE_TYPE(MultiWifiWindow, multiwifi_window, GTK_TYPE_APPLICATION_WINDOW)
@@ -195,9 +201,72 @@ static void on_paths_changed(MultiWifiPathMonitor *mon, gpointer user_data)
     update_devices_ui(self);
 }
 
+static void on_daemon_name_appeared(GDBusConnection *connection,
+                                    const gchar *name,
+                                    const gchar *name_owner,
+                                    gpointer user_data)
+{
+    (void)name;
+    (void)name_owner;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    self->daemon_connected = TRUE;
+    if (self->system_bus == NULL) {
+        self->system_bus = g_object_ref(connection);
+    }
+    if (self->daemon_status_lbl != NULL) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_status_lbl),
+            "<span foreground='#4caf50' weight='bold'>● Daemon Active (System D-Bus)</span>");
+    }
+}
+
+static void on_daemon_name_vanished(GDBusConnection *connection,
+                                    const gchar *name,
+                                    gpointer user_data)
+{
+    (void)connection;
+    (void)name;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    self->daemon_connected = FALSE;
+    if (self->daemon_status_lbl != NULL) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_status_lbl),
+            "<span foreground='#888888'>○ Daemon Standalone</span>");
+    }
+}
+
+static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    if (self->daemon_connected && self->system_bus != NULL) {
+        g_dbus_connection_call(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "RunDiagnostics",
+            NULL,
+            G_VARIANT_TYPE("(s)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            5000,
+            NULL,
+            NULL,
+            NULL
+        );
+    }
+    if (self->path_monitor != NULL) {
+        multiwifi_path_monitor_probe_all_async(self->path_monitor);
+    }
+}
+
 static void multiwifi_window_dispose(GObject *object)
 {
     MultiWifiWindow *self = MULTIWIFI_WINDOW(object);
+
+    if (self->bus_watcher_id > 0) {
+        g_bus_unwatch_name(self->bus_watcher_id);
+        self->bus_watcher_id = 0;
+    }
+    g_clear_object(&self->system_bus);
 
     if (self->path_monitor != NULL) {
         multiwifi_path_monitor_stop(self->path_monitor);
@@ -221,6 +290,29 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     /* Header Bar */
     GtkWidget *header = gtk_header_bar_new();
     gtk_window_set_titlebar(GTK_WINDOW(self), header);
+
+    GtkWidget *diag_btn = gtk_button_new_with_label("Probe Paths");
+    gtk_widget_set_tooltip_text(diag_btn, "Trigger path quality diagnostics cycle");
+    g_signal_connect(diag_btn, "clicked", G_CALLBACK(on_diagnostics_clicked), self);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), diag_btn);
+
+    self->daemon_status_lbl = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(self->daemon_status_lbl),
+        "<span foreground='#888888'>○ Daemon Standalone</span>");
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), self->daemon_status_lbl);
+
+    /* Watch system bus for MultiWiFi System Daemon */
+    self->system_bus = NULL;
+    self->daemon_connected = FALSE;
+    self->bus_watcher_id = g_bus_watch_name(
+        G_BUS_TYPE_SYSTEM,
+        MULTIWIFI_DBUS_NAME,
+        G_BUS_NAME_WATCHER_FLAGS_NONE,
+        on_daemon_name_appeared,
+        on_daemon_name_vanished,
+        self,
+        NULL
+    );
 
     /* Main Box */
     GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
@@ -304,7 +396,7 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     /* Status Bar Footer */
     GtkWidget *footer_label = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(footer_label),
-        "<span size='small' color='#888'>MultiWiFi " MULTIWIFI_VERSION_STRING " | Unprivileged Mode | Phase 2 (Path Monitor)</span>");
+        "<span size='small' color='#888'>MultiWiFi " MULTIWIFI_VERSION_STRING " | Unprivileged Mode | Phase 3 (System Daemon)</span>");
     gtk_widget_set_halign(footer_label, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(main_box), footer_label);
 
