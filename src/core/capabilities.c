@@ -1,4 +1,5 @@
 #include "multiwifi/core/capabilities.h"
+#include <gio/gio.h>
 #include <sys/utsname.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -66,12 +67,38 @@ void multiwifi_capabilities_probe(MultiWifiCapabilities *caps)
         caps->nftables = MULTIWIFI_CAP_STATE_UNSUPPORTED;
     }
 
-    /* Probe NetworkManager running state */
-    if (g_file_test("/run/NetworkManager/NetworkManager.pid", G_FILE_TEST_EXISTS) ||
-        g_file_test("/var/run/NetworkManager/NetworkManager.pid", G_FILE_TEST_EXISTS)) {
-        caps->network_manager = MULTIWIFI_CAP_STATE_ACTIVE;
+    /* Probe NetworkManager running state via System D-Bus */
+    caps->network_manager = MULTIWIFI_CAP_STATE_AVAILABLE_INACTIVE;
+    GError *dbus_err = NULL;
+    GDBusConnection *conn = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &dbus_err);
+    if (conn != NULL) {
+        GVariant *reply = g_dbus_connection_call_sync(
+            conn,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameHasOwner",
+            g_variant_new("(s)", "org.freedesktop.NetworkManager"),
+            G_VARIANT_TYPE("(b)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            250,
+            NULL,
+            NULL
+        );
+        if (reply != NULL) {
+            gboolean has_owner = FALSE;
+            g_variant_get(reply, "(b)", &has_owner);
+            g_variant_unref(reply);
+            if (has_owner) {
+                caps->network_manager = MULTIWIFI_CAP_STATE_ACTIVE;
+            }
+        }
+        g_object_unref(conn);
     } else {
-        caps->network_manager = MULTIWIFI_CAP_STATE_AVAILABLE_INACTIVE;
+        g_clear_error(&dbus_err);
+        if (g_file_test("/run/NetworkManager", G_FILE_TEST_IS_DIR)) {
+            caps->network_manager = MULTIWIFI_CAP_STATE_ACTIVE;
+        }
     }
 
     /* Probe Kernel MPTCP */

@@ -136,9 +136,18 @@ void multiwifi_path_monitor_remove_device(MultiWifiPathMonitor *self,
  * multiwifi_path_monitor_probe_all_now:
  * @self: Path monitor instance
  *
- * Executes one round of probing across all active paths synchronously or immediately.
+ * Executes one round of probing across all active paths synchronously.
  */
 void multiwifi_path_monitor_probe_all_now(MultiWifiPathMonitor *self);
+
+/**
+ * multiwifi_path_monitor_probe_all_async:
+ * @self: Path monitor instance
+ *
+ * Dispatches an asynchronous probe round on a background worker thread
+ * without blocking the GTK main loop.
+ */
+void multiwifi_path_monitor_probe_all_async(MultiWifiPathMonitor *self);
 
 /**
  * multiwifi_path_monitor_start:

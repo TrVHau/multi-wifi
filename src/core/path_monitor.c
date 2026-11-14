@@ -1,5 +1,6 @@
 #include "multiwifi/core/path_monitor.h"
 #include "multiwifi/core/logging.h"
+#include <gio/gio.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -31,11 +32,40 @@ typedef struct {
     guint probe_history_idx;
 } PathEntry;
 
+typedef struct {
+    gchar *ifname;
+    gchar *source_ip;
+    gchar *gateway;
+    gdouble measured_rtt;
+    gboolean success;
+} ProbeItem;
+
+static ProbeItem *probe_item_new(const gchar *ifname, const gchar *source_ip, const gchar *gateway)
+{
+    ProbeItem *item = g_new0(ProbeItem, 1);
+    item->ifname = g_strdup(ifname);
+    item->source_ip = g_strdup(source_ip);
+    item->gateway = g_strdup(gateway);
+    return item;
+}
+
+static void probe_item_free(ProbeItem *item)
+{
+    if (item == NULL) {
+        return;
+    }
+    g_free(item->ifname);
+    g_free(item->source_ip);
+    g_free(item->gateway);
+    g_free(item);
+}
+
 struct _MultiWifiPathMonitor {
     GObject parent_instance;
     GPtrArray *paths; /* PathEntry* */
     GMutex mutex;
     guint timer_id;
+    gboolean probing_in_flight;
 
     guint interval_ms;
     guint failure_threshold;
@@ -406,7 +436,7 @@ static void update_path_entry_result(MultiWifiPathMonitor *self,
                     p->status_reason = g_strdup("Online: Verified upstream reachability");
                 } else {
                     g_free(p->status_reason);
-                    p->status_reason = g_strdup_printf("Stabilizing in cooldown (%ld/%u ms)",
+                    p->status_reason = g_strdup_printf("Stabilizing in cooldown (%" G_GINT64_FORMAT "/%u ms)",
                                                        cooldown_elapsed_ms, self->cooldown_ms);
                 }
             } else {
@@ -477,10 +507,105 @@ void multiwifi_path_monitor_probe_all_now(MultiWifiPathMonitor *self)
     g_signal_emit(self, s_signals[SIGNAL_PATHS_CHANGED], 0);
 }
 
+static void probe_worker_thread(GTask *task,
+                                gpointer source_obj,
+                                gpointer task_data,
+                                GCancellable *cancellable)
+{
+    (void)source_obj;
+    (void)cancellable;
+    GPtrArray *batch = (GPtrArray *)task_data;
+    MultiWifiPathMonitor *self = MULTIWIFI_PATH_MONITOR(g_task_get_source_object(task));
+
+    MultiWifiProbeFunc probe_fn;
+    gpointer probe_data;
+
+    g_mutex_lock(&self->mutex);
+    probe_fn = self->custom_probe_fn ? self->custom_probe_fn : default_socket_probe;
+    probe_data = self->custom_probe_data;
+    g_mutex_unlock(&self->mutex);
+
+    for (guint i = 0; i < batch->len; i++) {
+        ProbeItem *item = g_ptr_array_index(batch, i);
+        item->success = probe_fn(item->ifname, item->source_ip, item->gateway, &item->measured_rtt, probe_data);
+    }
+
+    g_task_return_boolean(task, TRUE);
+}
+
+static void on_probe_task_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    (void)user_data;
+    MultiWifiPathMonitor *self = MULTIWIFI_PATH_MONITOR(source);
+    GError *error = NULL;
+
+    if (!g_task_propagate_boolean(G_TASK(res), &error)) {
+        if (error != NULL) {
+            g_clear_error(&error);
+        }
+    }
+
+    GPtrArray *batch = (GPtrArray *)g_task_get_task_data(G_TASK(res));
+
+    g_mutex_lock(&self->mutex);
+    if (batch != NULL) {
+        for (guint i = 0; i < batch->len; i++) {
+            ProbeItem *item = g_ptr_array_index(batch, i);
+            PathEntry *e = find_entry_locked(self, item->ifname);
+            if (e != NULL) {
+                update_path_entry_result(self, e, item->success, item->measured_rtt);
+            }
+        }
+    }
+    self->probing_in_flight = FALSE;
+    g_mutex_unlock(&self->mutex);
+
+    g_signal_emit(self, s_signals[SIGNAL_PATHS_CHANGED], 0);
+}
+
+void multiwifi_path_monitor_probe_all_async(MultiWifiPathMonitor *self)
+{
+    if (self == NULL) {
+        return;
+    }
+
+    g_mutex_lock(&self->mutex);
+    if (self->probing_in_flight) {
+        g_mutex_unlock(&self->mutex);
+        return;
+    }
+
+    GPtrArray *batch = g_ptr_array_new_with_free_func((GDestroyNotify)probe_item_free);
+    for (guint i = 0; i < self->paths->len; i++) {
+        PathEntry *e = g_ptr_array_index(self->paths, i);
+        MultiWifiPathInfo *p = e->info;
+
+        if (p->state == MULTIWIFI_PATH_STATE_OFFLINE || p->gateway == NULL || p->source_ip == NULL) {
+            continue;
+        }
+
+        g_ptr_array_add(batch, probe_item_new(p->ifname, p->source_ip, p->gateway));
+    }
+
+    if (batch->len == 0) {
+        g_ptr_array_unref(batch);
+        g_mutex_unlock(&self->mutex);
+        return;
+    }
+
+    self->probing_in_flight = TRUE;
+    g_mutex_unlock(&self->mutex);
+
+    GTask *task = g_task_new(self, NULL, on_probe_task_done, NULL);
+    g_task_set_task_data(task, batch, (GDestroyNotify)g_ptr_array_unref);
+    g_task_run_in_thread(task, probe_worker_thread);
+    g_object_unref(task);
+}
+
 static gboolean on_timer_tick(gpointer user_data)
 {
     MultiWifiPathMonitor *self = MULTIWIFI_PATH_MONITOR(user_data);
-    multiwifi_path_monitor_probe_all_now(self);
+    multiwifi_path_monitor_probe_all_async(self);
     return G_SOURCE_CONTINUE;
 }
 
@@ -495,8 +620,8 @@ void multiwifi_path_monitor_start(MultiWifiPathMonitor *self)
     }
     g_mutex_unlock(&self->mutex);
 
-    /* Run one immediate probe round */
-    multiwifi_path_monitor_probe_all_now(self);
+    /* Run initial probe round asynchronously */
+    multiwifi_path_monitor_probe_all_async(self);
 }
 
 void multiwifi_path_monitor_stop(MultiWifiPathMonitor *self)

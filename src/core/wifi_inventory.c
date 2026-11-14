@@ -20,7 +20,6 @@ struct _MultiWifiInventory {
 G_DEFINE_TYPE(MultiWifiInventory, multiwifi_inventory, G_TYPE_OBJECT)
 
 static void multiwifi_inventory_refresh_locked(MultiWifiInventory *self);
-static void on_device_changed(NMDevice *device, gpointer user_data);
 
 static void multiwifi_inventory_dispose(GObject *object)
 {
@@ -152,16 +151,48 @@ static MultiWifiDeviceInfo *extract_wifi_device_info(NMDeviceWifi *wifi_dev)
     return info;
 }
 
+static void on_device_state_changed(NMDevice *device,
+                                    NMDeviceState new_state,
+                                    NMDeviceState old_state,
+                                    NMDeviceStateReason reason,
+                                    gpointer user_data)
+{
+    (void)device;
+    (void)new_state;
+    (void)old_state;
+    (void)reason;
+    MultiWifiInventory *self = MULTIWIFI_INVENTORY(user_data);
+
+    g_mutex_lock(&self->mutex);
+    multiwifi_inventory_refresh_locked(self);
+    g_mutex_unlock(&self->mutex);
+
+    g_signal_emit(self, s_signals[SIGNAL_DEVICES_CHANGED], 0);
+}
+
+static void on_device_notify(GObject *object, GParamSpec *pspec, gpointer user_data)
+{
+    (void)object;
+    (void)pspec;
+    MultiWifiInventory *self = MULTIWIFI_INVENTORY(user_data);
+
+    g_mutex_lock(&self->mutex);
+    multiwifi_inventory_refresh_locked(self);
+    g_mutex_unlock(&self->mutex);
+
+    g_signal_emit(self, s_signals[SIGNAL_DEVICES_CHANGED], 0);
+}
+
 static void watch_device_signals(MultiWifiInventory *self, NMDevice *dev)
 {
     g_signal_connect_object(dev, "state-changed",
-                            G_CALLBACK(on_device_changed), self, G_CONNECT_SWAPPED);
+                            G_CALLBACK(on_device_state_changed), self, 0);
     g_signal_connect_object(dev, "notify::active-access-point",
-                            G_CALLBACK(on_device_changed), self, G_CONNECT_SWAPPED);
+                            G_CALLBACK(on_device_notify), self, 0);
     g_signal_connect_object(dev, "notify::ip4-config",
-                            G_CALLBACK(on_device_changed), self, G_CONNECT_SWAPPED);
+                            G_CALLBACK(on_device_notify), self, 0);
     g_signal_connect_object(dev, "notify::ip6-config",
-                            G_CALLBACK(on_device_changed), self, G_CONNECT_SWAPPED);
+                            G_CALLBACK(on_device_notify), self, 0);
 }
 
 static void multiwifi_inventory_refresh_locked(MultiWifiInventory *self)
@@ -184,18 +215,6 @@ static void multiwifi_inventory_refresh_locked(MultiWifiInventory *self)
             g_ptr_array_add(self->cached_devices, info);
         }
     }
-}
-
-static void on_device_changed(NMDevice *device, gpointer user_data)
-{
-    (void)device;
-    MultiWifiInventory *self = MULTIWIFI_INVENTORY(user_data);
-
-    g_mutex_lock(&self->mutex);
-    multiwifi_inventory_refresh_locked(self);
-    g_mutex_unlock(&self->mutex);
-
-    g_signal_emit(self, s_signals[SIGNAL_DEVICES_CHANGED], 0);
 }
 
 static void on_device_added(NMClient *client, NMDevice *device, gpointer user_data)

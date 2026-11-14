@@ -109,18 +109,22 @@ static void update_devices_ui(MultiWifiWindow *self)
 
         if (info->state == MULTIWIFI_DEVICE_STATE_CONNECTED) {
             double freq_ghz = (double)info->frequency / 1000.0;
+            gchar *escaped_ssid = g_markup_escape_text(info->ssid ? info->ssid : "Hidden", -1);
+            gchar *escaped_profile = g_markup_escape_text(info->connection_id ? info->connection_id : "Active", -1);
             gchar *details_markup = g_strdup_printf(
                 "<b>SSID:</b> %s    <b>Signal:</b> %u%%    <b>Frequency:</b> %.1f GHz\n"
                 "<b>IPv4:</b> %s    <b>Gateway:</b> %s    <b>Profile:</b> %s",
-                info->ssid ? info->ssid : "Hidden",
+                escaped_ssid,
                 info->signal_strength,
                 freq_ghz,
                 info->ipv4_address ? info->ipv4_address : "Pending DHCP",
                 info->ipv4_gateway ? info->ipv4_gateway : "None",
-                info->connection_id ? info->connection_id : "Active"
+                escaped_profile
             );
             gtk_label_set_markup(GTK_LABEL(details_lbl), details_markup);
             g_free(details_markup);
+            g_free(escaped_ssid);
+            g_free(escaped_profile);
         } else {
             gtk_label_set_markup(GTK_LABEL(details_lbl),
                 "<span size='small' color='#777'><i>Adapter is idle. Ready to associate.</i></span>");
@@ -136,6 +140,7 @@ static void update_devices_ui(MultiWifiWindow *self)
                 ? "<span foreground='#4caf50'>Eligible</span>"
                 : "<span foreground='#e91e63'>Excluded</span>";
 
+            gchar *escaped_reason = g_markup_escape_text(path->status_reason ? path->status_reason : "N/A", -1);
             gchar *metrics_markup = g_strdup_printf(
                 "<span size='small' color='#aaa'>"
                 "<b>Path Diagnostics:</b> RTT: <b>%.1f ms</b> (min: %.1f, max: %.1f, jitter: %.1f) | "
@@ -145,11 +150,12 @@ static void update_devices_ui(MultiWifiWindow *self)
                 path->max_rtt_ms,
                 path->jitter_ms,
                 path->packet_loss_percent,
-                path->status_reason ? path->status_reason : "N/A",
+                escaped_reason,
                 eligibility_str
             );
             gtk_label_set_markup(GTK_LABEL(metrics_lbl), metrics_markup);
             g_free(metrics_markup);
+            g_free(escaped_reason);
             gtk_box_append(GTK_BOX(card_box), metrics_lbl);
         }
 
@@ -242,6 +248,7 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     MultiWifiCapabilities *caps = multiwifi_capabilities_new();
     multiwifi_capabilities_probe(caps);
 
+    gchar *escaped_mptcp = g_markup_escape_text(caps->mptcp_details ? caps->mptcp_details : "none", -1);
     gchar *caps_text = g_strdup_printf(
         "<b>Kernel:</b> %s\n"
         "<b>NetworkManager:</b> %s\n"
@@ -251,10 +258,11 @@ static void multiwifi_window_init(MultiWifiWindow *self)
         caps->kernel_version ? caps->kernel_version : "Unknown",
         multiwifi_cap_state_to_string(caps->network_manager),
         multiwifi_cap_state_to_string(caps->kernel_mptcp),
-        caps->mptcp_details ? caps->mptcp_details : "none",
+        escaped_mptcp,
         multiwifi_cap_state_to_string(caps->nftables),
         multiwifi_cap_state_to_string(caps->tun_device)
     );
+    g_free(escaped_mptcp);
 
     self->caps_label = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(self->caps_label), caps_text);

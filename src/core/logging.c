@@ -6,6 +6,27 @@
 
 static gboolean s_logging_initialized = FALSE;
 static GRegex *s_secret_regex = NULL;
+static GMutex s_log_mutex;
+
+static void ensure_regex_compiled_locked(void)
+{
+    if (s_secret_regex != NULL) {
+        return;
+    }
+
+    GError *error = NULL;
+    /* Case-insensitive pattern to capture sensitive key-value pairs or tokens */
+    s_secret_regex = g_regex_new(
+        "(?i)(password|token|secret|private[_-]?key|psk|passphrase)\\s*[:=]\\s*([\"'][^\"']+[\"']|[^\\s,]+)",
+        G_REGEX_OPTIMIZE,
+        0,
+        &error
+    );
+    if (error != NULL) {
+        g_printerr("Failed to compile secret redaction regex: %s\n", error->message);
+        g_error_free(error);
+    }
+}
 
 gchar *multiwifi_redact_secrets(const gchar *message)
 {
@@ -13,25 +34,18 @@ gchar *multiwifi_redact_secrets(const gchar *message)
         return NULL;
     }
 
-    if (s_secret_regex == NULL) {
-        GError *error = NULL;
-        /* Case-insensitive pattern to capture sensitive key-value pairs or tokens */
-        s_secret_regex = g_regex_new(
-            "(?i)(password|token|secret|private[_-]?key|psk|passphrase)\\s*[:=]\\s*([\"'][^\"']+[\"']|[^\\s,]+)",
-            G_REGEX_OPTIMIZE,
-            0,
-            &error
-        );
-        if (error != NULL) {
-            g_printerr("Failed to compile secret redaction regex: %s\n", error->message);
-            g_error_free(error);
-            return g_strdup(message);
-        }
+    g_mutex_lock(&s_log_mutex);
+    ensure_regex_compiled_locked();
+    GRegex *regex = s_secret_regex;
+    g_mutex_unlock(&s_log_mutex);
+
+    if (regex == NULL) {
+        return g_strdup(message);
     }
 
     /* Replace secret values with [REDACTED] while keeping the key label */
     return g_regex_replace(
-        s_secret_regex,
+        regex,
         message,
         -1,
         0,
