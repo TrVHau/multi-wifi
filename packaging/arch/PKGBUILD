@@ -1,0 +1,26 @@
+# Maintainer: MultiWiFi Team <support@multiwifi.local>
+pkgname=multiwifi
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native Linux desktop application for multi-path Wi-Fi load balancing and MPTCP bonding"
+arch=('x86_64')
+url="https://github.com/TrVHau/multi-wifi"
+license=('MIT')
+depends=('gtk4>=4.10' 'glib2>=2.74' 'libnm>=1.40' 'polkit' 'nftables')
+makedepends=('cmake' 'ninja' 'pkgconf')
+install=multiwifi.install
+source=()
+
+build() {
+  cmake -B build -S . \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_SYSCONFDIR=/etc \
+    -DCMAKE_INSTALL_LIBDIR=lib
+  cmake --build build
+}
+
+package() {
+  DESTDIR="${pkgdir}" cmake --install build
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

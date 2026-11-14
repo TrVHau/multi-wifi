@@ -1,0 +1,29 @@
+Source: multiwifi
+Section: net
+Priority: optional
+Maintainer: MultiWiFi Team <support@multiwifi.local>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.20),
+               pkg-config,
+               libgtk-4-dev (>= 4.10),
+               libglib2.0-dev (>= 2.74),
+               libnm-dev (>= 1.40),
+               libpolkit-gobject-1-dev,
+               libnftables-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/TrVHau/multi-wifi
+
+Package: multiwifi
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         libgtk-4-1 (>= 4.10),
+         libglib2.0-0 (>= 2.74),
+         libnm0 (>= 1.40),
+         libpolkit-gobject-1-0,
+         libnftables1
+Description: Native Linux multi-path Wi-Fi load balancing and MPTCP bonding
+ MultiWiFi is a native Linux desktop application built with C11 and GTK4.
+ It manages multiple active Wi-Fi uplinks, providing flow-affinity load
+ balancing across independent NetworkManager connections and high-throughput
+ MPTCP bonding through remote aggregation endpoints.

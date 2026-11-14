@@ -110,3 +110,36 @@ install(FILES data/io.github.multiwifi.policy
 install(FILES data/multiwifi-daemon.service
     DESTINATION lib/systemd/system
 )
+
+# Packaging with CPack
+set(CPACK_PACKAGE_NAME "multiwifi")
+set(CPACK_PACKAGE_VENDOR "MultiWiFi Team")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Native Linux multi-path Wi-Fi load balancing and MPTCP bonding")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
+set(CPACK_PACKAGE_VERSION_MINOR "${PROJECT_VERSION_MINOR}")
+set(CPACK_PACKAGE_VERSION_PATCH "${PROJECT_VERSION_PATCH}")
+set(CPACK_PACKAGE_CONTACT "support@multiwifi.local")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+
+# Debian (.deb)
+set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/TrVHau/multi-wifi")
+set(CPACK_DEBIAN_PACKAGE_SECTION "net")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgtk-4-1 (>= 4.10), libglib2.0-0 (>= 2.74), libnm0 (>= 1.40), libpolkit-gobject-1-0, libnftables1")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "MultiWiFi Team <support@multiwifi.local>")
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postinst;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/prerm;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postrm"
+)
+
+# RPM (.rpm)
+set(CPACK_RPM_PACKAGE_LICENSE "MIT")
+set(CPACK_RPM_PACKAGE_GROUP "Applications/Internet")
+set(CPACK_RPM_PACKAGE_URL "https://github.com/TrVHau/multi-wifi")
+set(CPACK_RPM_PACKAGE_REQUIRES "gtk4 >= 4.10, glib2 >= 2.74, NetworkManager-libnm >= 1.40, polkit, libnftables")
+
+# Archive (.tar.zst and .tar.gz)
+set(CPACK_ARCHIVE_THREADS 0)
+set(CPACK_GENERATOR "DEB;TZST")
+
+include(CPack)

@@ -10,12 +10,17 @@ struct _MultiWifiWindow {
     GtkApplicationWindow parent_instance;
     GtkWidget *caps_label;
     GtkWidget *daemon_status_lbl;
+    GtkWidget *daemon_banner;
+    GtkWidget *lb_btn;
+    GtkWidget *bonding_btn;
     GtkWidget *devices_box;
     MultiWifiInventory *inventory;
     MultiWifiPathMonitor *path_monitor;
     guint bus_watcher_id;
     GDBusConnection *system_bus;
     gboolean daemon_connected;
+    gboolean lb_active;
+    gboolean bonding_active;
 };
 
 G_DEFINE_TYPE(MultiWifiWindow, multiwifi_window, GTK_TYPE_APPLICATION_WINDOW)
@@ -201,6 +206,191 @@ static void on_paths_changed(MultiWifiPathMonitor *mon, gpointer user_data)
     update_devices_ui(self);
 }
 
+static void update_control_buttons_state(MultiWifiWindow *self)
+{
+    if (self->lb_btn == NULL || self->bonding_btn == NULL || self->daemon_banner == NULL) {
+        return;
+    }
+
+    if (self->daemon_connected) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#388e3c'><b>System Daemon Active:</b> Connected via D-Bus. Privileged actions authorized via Polkit.</span>");
+
+        gtk_widget_set_sensitive(self->lb_btn, !self->bonding_active);
+        gtk_widget_set_sensitive(self->bonding_btn, !self->lb_active);
+
+        if (self->lb_active) {
+            gtk_button_set_label(GTK_BUTTON(self->lb_btn), "Stop Load Balancing");
+            gtk_widget_set_tooltip_text(self->lb_btn, "Stop active multi-path policy routing and restore default route");
+        } else {
+            gtk_button_set_label(GTK_BUTTON(self->lb_btn), "Start Load Balancing");
+            gtk_widget_set_tooltip_text(self->lb_btn, "Aggregate connected Wi-Fi uplinks with flow-affinity load balancing");
+        }
+
+        if (self->bonding_active) {
+            gtk_button_set_label(GTK_BUTTON(self->bonding_btn), "Stop Bonding");
+            gtk_widget_set_tooltip_text(self->bonding_btn, "Terminate MPTCP bonding tunnel");
+        } else {
+            gtk_button_set_label(GTK_BUTTON(self->bonding_btn), "Start Bonding");
+            gtk_widget_set_tooltip_text(self->bonding_btn, "Establish MPTCP bonding tunnel through aggregation server");
+        }
+    } else {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#d32f2f'><b>System Daemon Inactive:</b> Network mutation (Load Balancing &amp; Bonding) requires <code>multiwifi-daemon</code>.<br/>"
+            "To enable, run: <code>sudo systemctl enable --now multiwifi-daemon</code></span>");
+
+        gtk_widget_set_sensitive(self->lb_btn, FALSE);
+        gtk_widget_set_sensitive(self->bonding_btn, FALSE);
+        gtk_widget_set_tooltip_text(self->lb_btn, "Unavailable: MultiWiFi daemon is not running on system bus");
+        gtk_widget_set_tooltip_text(self->bonding_btn, "Unavailable: MultiWiFi daemon is not running on system bus");
+    }
+}
+
+static void on_status_query_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    if (reply != NULL) {
+        GVariant *dict = NULL;
+        g_variant_get(reply, "(@a{sv})", &dict);
+        if (dict != NULL) {
+            GVariant *v_mode = g_variant_lookup_value(dict, "mode", G_VARIANT_TYPE_STRING);
+            if (v_mode != NULL) {
+                const gchar *m = g_variant_get_string(v_mode, NULL);
+                self->lb_active = (g_strcmp0(m, "load_balancing") == 0);
+                self->bonding_active = (g_strcmp0(m, "bonding") == 0);
+                g_variant_unref(v_mode);
+            }
+            g_variant_unref(dict);
+        }
+        g_variant_unref(reply);
+    } else if (error != NULL) {
+        g_clear_error(&error);
+    }
+    update_control_buttons_state(self);
+}
+
+static void on_lb_action_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        self->lb_active = !self->lb_active;
+    } else if (error != NULL) {
+        g_warning("Load balancing action failed: %s", error->message);
+        g_clear_error(&error);
+    }
+    update_control_buttons_state(self);
+}
+
+static void on_lb_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    if (!self->daemon_connected || self->system_bus == NULL) {
+        return;
+    }
+
+    if (self->lb_active) {
+        g_dbus_connection_call(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "StopLoadBalancing",
+            NULL,
+            G_VARIANT_TYPE("(s)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            10000,
+            NULL,
+            on_lb_action_done,
+            self
+        );
+    } else {
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+        g_dbus_connection_call(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "StartLoadBalancing",
+            g_variant_new("(@a{sv})", g_variant_builder_end(&b)),
+            G_VARIANT_TYPE("(s)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            10000,
+            NULL,
+            on_lb_action_done,
+            self
+        );
+    }
+}
+
+static void on_bonding_action_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        self->bonding_active = !self->bonding_active;
+    } else if (error != NULL) {
+        g_warning("Bonding action failed: %s", error->message);
+        g_clear_error(&error);
+    }
+    update_control_buttons_state(self);
+}
+
+static void on_bonding_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    if (!self->daemon_connected || self->system_bus == NULL) {
+        return;
+    }
+
+    if (self->bonding_active) {
+        g_dbus_connection_call(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "StopBonding",
+            NULL,
+            G_VARIANT_TYPE("(s)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            10000,
+            NULL,
+            on_bonding_action_done,
+            self
+        );
+    } else {
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+        g_variant_builder_add(&b, "{sv}", "server_host", g_variant_new_string("127.0.0.1"));
+        g_variant_builder_add(&b, "{sv}", "server_port", g_variant_new_uint32(5000));
+        g_variant_builder_add(&b, "{sv}", "token", g_variant_new_string("demo-token"));
+
+        g_dbus_connection_call(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "StartBonding",
+            g_variant_new("(@a{sv})", g_variant_builder_end(&b)),
+            G_VARIANT_TYPE("(s)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            10000,
+            NULL,
+            on_bonding_action_done,
+            self
+        );
+    }
+}
+
 static void on_daemon_name_appeared(GDBusConnection *connection,
                                     const gchar *name,
                                     const gchar *name_owner,
@@ -217,6 +407,24 @@ static void on_daemon_name_appeared(GDBusConnection *connection,
         gtk_label_set_markup(GTK_LABEL(self->daemon_status_lbl),
             "<span foreground='#4caf50' weight='bold'>● Daemon Active (System D-Bus)</span>");
     }
+
+    /* Query current mode on daemon */
+    g_dbus_connection_call(
+        self->system_bus,
+        MULTIWIFI_DBUS_NAME,
+        MULTIWIFI_DBUS_PATH,
+        MULTIWIFI_DBUS_INTERFACE,
+        "GetStatus",
+        NULL,
+        G_VARIANT_TYPE("(a{sv})"),
+        G_DBUS_CALL_FLAGS_NONE,
+        5000,
+        NULL,
+        on_status_query_done,
+        self
+    );
+
+    update_control_buttons_state(self);
 }
 
 static void on_daemon_name_vanished(GDBusConnection *connection,
@@ -227,10 +435,13 @@ static void on_daemon_name_vanished(GDBusConnection *connection,
     (void)name;
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
     self->daemon_connected = FALSE;
+    self->lb_active = FALSE;
+    self->bonding_active = FALSE;
     if (self->daemon_status_lbl != NULL) {
         gtk_label_set_markup(GTK_LABEL(self->daemon_status_lbl),
             "<span foreground='#888888'>○ Daemon Standalone</span>");
     }
+    update_control_buttons_state(self);
 }
 
 static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data)
@@ -328,6 +539,35 @@ static void multiwifi_window_init(MultiWifiWindow *self)
         "<span size='small' color='#666'>Native Linux Multi-Path Uplink &amp; Bonding</span>");
     gtk_widget_set_halign(title_label, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(main_box), title_label);
+
+    /* Daemon Status Banner (informs users if daemon is absent or active) */
+    self->daemon_banner = gtk_label_new(NULL);
+    gtk_label_set_wrap(GTK_LABEL(self->daemon_banner), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(self->daemon_banner), 0.0f);
+    gtk_box_append(GTK_BOX(main_box), self->daemon_banner);
+
+    /* Operations Action Card (Phase 7 packaging compliance) */
+    GtkWidget *ops_frame = gtk_frame_new("Multi-Path Operations");
+    GtkWidget *ops_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_widget_set_margin_top(ops_box, 10);
+    gtk_widget_set_margin_bottom(ops_box, 10);
+    gtk_widget_set_margin_start(ops_box, 12);
+    gtk_widget_set_margin_end(ops_box, 12);
+
+    self->lb_btn = gtk_button_new_with_label("Start Load Balancing");
+    g_signal_connect(self->lb_btn, "clicked", G_CALLBACK(on_lb_clicked), self);
+    gtk_box_append(GTK_BOX(ops_box), self->lb_btn);
+
+    self->bonding_btn = gtk_button_new_with_label("Start Bonding");
+    g_signal_connect(self->bonding_btn, "clicked", G_CALLBACK(on_bonding_clicked), self);
+    gtk_box_append(GTK_BOX(ops_box), self->bonding_btn);
+
+    gtk_frame_set_child(GTK_FRAME(ops_frame), ops_box);
+    gtk_box_append(GTK_BOX(main_box), ops_frame);
+
+    self->lb_active = FALSE;
+    self->bonding_active = FALSE;
+    update_control_buttons_state(self);
 
     /* Capabilities Card */
     GtkWidget *caps_frame = gtk_frame_new("System Capabilities");

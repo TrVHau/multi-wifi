@@ -1,0 +1,28 @@
+post_install() {
+    # Reload systemd daemon to pick up newly installed unit file
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    # Mandatory rule: Package installation must NOT automatically activate networking modes
+    echo ":: MultiWiFi installed successfully."
+    echo ":: The GUI runs unprivileged as ordinary desktop user."
+    echo ":: Daemon unit provided: multiwifi-daemon.service"
+}
+
+post_upgrade() {
+    post_install
+}
+
+pre_remove() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop multiwifi-daemon.service >/dev/null 2>&1 || true
+        systemctl disable multiwifi-daemon.service >/dev/null 2>&1 || true
+    fi
+}
+
+post_remove() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+}

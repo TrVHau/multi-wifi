@@ -29,3 +29,11 @@ add_test(NAME test_load_balancer COMMAND test_load_balancer)
 add_executable(test_bonding test_bonding.c)
 target_link_libraries(test_bonding PRIVATE multiwifi-core)
 add_test(NAME test_bonding COMMAND test_bonding)
+
+add_executable(test_packaging test_packaging.c)
+target_compile_definitions(test_packaging PRIVATE
+    MULTIWIFI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    MULTIWIFI_BUILD_DIR="${CMAKE_BINARY_DIR}"
+)
+target_link_libraries(test_packaging PRIVATE multiwifi-core)
+add_test(NAME test_packaging COMMAND test_packaging)

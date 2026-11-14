@@ -77,6 +77,19 @@ ctest --test-dir build --output-on-failure --verbose
 sudo ./build/multiwifi-daemon
 ```
 
+### Packaging Commands
+
+```bash
+# Generate Debian (.deb) and portable tarball (.tar.zst) packages via CPack
+cd build && cpack
+
+# Build portable unprivileged GUI AppDir bundle
+./packaging/appimage/build-appimage.sh build
+
+# Build Arch Linux package (.pkg.tar.zst)
+cd packaging/arch && makepkg -s
+```
+
 ## Phases
 
 - [x] **Phase 0:** Foundation — Clean C11/GTK4 build system, logging with secret redaction, capability inspection, config schema/validation, unit tests and CI.
@@ -86,7 +99,7 @@ sudo ./build/multiwifi-daemon
 - [x] **Phase 4:** Routing transaction manager — Plan generation, conflict detection, rtnetlink socket backend, transactional journal on disk, readback verification, atomic rollback on failure, crash-recovery reconciliation, and isolated network namespace integration tests.
 - [x] **Phase 5:** Load balancing — Weighted Round-Robin (WRR) flow scheduler with GCD scaling, dynamic health penalties on packet loss/RTT, declarative nftables dataplane (`table ip multiwifi`) with source-port flow affinity, zero host firewall flushing, atomic teardown/rollback, and dynamic D-Bus path weighting.
 - [x] **Phase 6:** Bonding — Remote aggregation protocol (magic header, framing, authentication handshake, streaming parser with resync), TUN device encapsulation, recursive loop prevention with dedicated host routing, MPTCP transport socket with standard TCP fallback, bidirectional IP forwarding worker, and transactional lifecycle management.
-- [ ] **Phase 7:** Packaging and release.
+- [x] **Phase 7:** Packaging and release — Native distribution packages for Arch (`PKGBUILD`), Debian (`.deb` with safe `postinst`/`prerm`/`postrm` maintainer scripts), and RPM (`multiwifi.spec` with systemd macros), portable GUI-only AppImage bundle (`AppRun` without privileged escalation), clean lifecycle tests, and security review.
 
 ## Constraints
 

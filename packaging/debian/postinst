@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Ensure daemon executable has correct permissions
+        if [ -f /usr/bin/multiwifi-daemon ]; then
+            chmod 0755 /usr/bin/multiwifi-daemon
+        fi
+
+        # Reload systemd daemon
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+
+        # Installation must NOT activate networking modes automatically
+        # Service is left disabled by default for the user/admin to enable
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

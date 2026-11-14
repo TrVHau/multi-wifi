@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+# Determine AppDir directory
+HERE="$(dirname "$(readlink -f "${0}")")"
+
+export PATH="${HERE}/usr/bin:${PATH}"
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+# Note: AppImage is portable GUI-only.
+# It runs unprivileged and communicates with the system daemon over D-Bus.
+# It does NOT request root privileges or alter routes directly.
+exec "${HERE}/usr/bin/multiwifi-gui" "$@"
