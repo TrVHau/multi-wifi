@@ -42,12 +42,12 @@ void multiwifi_netlink_close(int nl_fd)
     }
 }
 
-static void add_rtattr(struct nlmsghdr *n, int maxlen, int type, const void *data, int alen)
+static void add_rtattr(struct nlmsghdr *n, size_t maxlen, unsigned short type, const void *data, size_t alen)
 {
-    int len = RTA_LENGTH(alen);
-    int rta_len = RTA_ALIGN(len);
+    unsigned short len = (unsigned short)RTA_LENGTH(alen);
+    unsigned short rta_len = (unsigned short)RTA_ALIGN(len);
 
-    if ((int)(NLMSG_ALIGN(n->nlmsg_len) + rta_len) > maxlen) {
+    if (NLMSG_ALIGN(n->nlmsg_len) + rta_len > maxlen) {
         return;
     }
 
@@ -57,7 +57,7 @@ static void add_rtattr(struct nlmsghdr *n, int maxlen, int type, const void *dat
     if (alen > 0 && data != NULL) {
         memcpy(RTA_DATA(rta), data, alen);
     }
-    n->nlmsg_len = NLMSG_ALIGN(n->nlmsg_len) + rta_len;
+    n->nlmsg_len = (uint32_t)(NLMSG_ALIGN(n->nlmsg_len) + rta_len);
 }
 
 static gboolean send_and_recv_ack(int nl_fd, struct nlmsghdr *nlh, GError **error)
@@ -271,7 +271,8 @@ gboolean multiwifi_netlink_verify_rule(int nl_fd,
                 uint32_t r_table = rule->table;
                 uint32_t r_pref = 0;
 
-                int rta_len = resp->nlmsg_len - NLMSG_LENGTH(sizeof(*rule));
+                size_t hdr_len = NLMSG_LENGTH(sizeof(*rule));
+                int rta_len = (resp->nlmsg_len >= hdr_len) ? (int)(resp->nlmsg_len - hdr_len) : 0;
                 struct rtattr *rta = (struct rtattr *)(((char *)rule) + NLMSG_ALIGN(sizeof(*rule)));
 
                 for (; RTA_OK(rta, rta_len); rta = RTA_NEXT(rta, rta_len)) {
@@ -479,7 +480,8 @@ gboolean multiwifi_netlink_verify_route(int nl_fd,
                 memset(&r_gw, 0, sizeof(r_gw));
                 gboolean r_has_gw = FALSE;
 
-                int rta_len = resp->nlmsg_len - NLMSG_LENGTH(sizeof(*r));
+                size_t hdr_len = NLMSG_LENGTH(sizeof(*r));
+                int rta_len = (resp->nlmsg_len >= hdr_len) ? (int)(resp->nlmsg_len - hdr_len) : 0;
                 struct rtattr *rta = (struct rtattr *)(((char *)r) + NLMSG_ALIGN(sizeof(*r)));
 
                 for (; RTA_OK(rta, rta_len); rta = RTA_NEXT(rta, rta_len)) {
