@@ -236,8 +236,8 @@ static void update_control_buttons_state(MultiWifiWindow *self)
         }
     } else {
         gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-            "<span size='small' color='#d32f2f'><b>System Daemon Inactive:</b> Network mutation (Load Balancing &amp; Bonding) requires <code>multiwifi-daemon</code>.<br/>"
-            "To enable, run: <code>sudo systemctl enable --now multiwifi-daemon</code></span>");
+            "<span size='small' color='#d32f2f'><b>System Daemon Inactive:</b> Network mutation (Load Balancing &amp; Bonding) requires <tt>multiwifi-daemon</tt>.\n"
+            "To enable, run: <tt>sudo systemctl enable --now multiwifi-daemon</tt></span>");
 
         gtk_widget_set_sensitive(self->lb_btn, FALSE);
         gtk_widget_set_sensitive(self->bonding_btn, FALSE);
