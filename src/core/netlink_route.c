@@ -77,7 +77,11 @@ static gboolean send_and_recv_ack(int nl_fd, struct nlmsghdr *nlh, GError **erro
     }
 
     char buf[MULTIWIFI_NL_BUF_SIZE];
-    ssize_t len = recv(nl_fd, buf, sizeof(buf), 0);
+    ssize_t len;
+    do {
+        len = recv(nl_fd, buf, sizeof(buf), 0);
+    } while (len < 0 && errno == EINTR);
+
     if (len < 0) {
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
                     "Netlink recv failed: %s", g_strerror(errno));
@@ -251,6 +255,9 @@ gboolean multiwifi_netlink_verify_rule(int nl_fd,
     while (!done) {
         ssize_t len = recv(nl_fd, recv_buf, sizeof(recv_buf), 0);
         if (len < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
             g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Recv error during rule dump: %s", g_strerror(errno));
             return FALSE;
         }
@@ -578,6 +585,9 @@ gboolean multiwifi_netlink_verify_route(int nl_fd,
     while (!done) {
         ssize_t len = recv(nl_fd, recv_buf, sizeof(recv_buf), 0);
         if (len < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
             g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Recv error during route dump: %s", g_strerror(errno));
             return FALSE;
         }

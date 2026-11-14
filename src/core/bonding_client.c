@@ -184,6 +184,16 @@ static gpointer bonding_worker_thread(gpointer user_data)
             break;
         }
 
+        if (fds[1].revents & (POLLERR | POLLNVAL)) {
+            break;
+        }
+        if (fds[0].revents & (POLLERR | POLLNVAL)) {
+            break;
+        }
+        if ((fds[1].revents & POLLHUP) && !(fds[1].revents & POLLIN)) {
+            break;
+        }
+
         /* 1. TUN readable -> send packet to socket */
         if (fds[0].revents & POLLIN) {
             gssize n_read = multiwifi_tun_device_read(self->tun, io_buf, sizeof(io_buf), NULL);
@@ -240,6 +250,14 @@ static gpointer bonding_worker_thread(gpointer user_data)
 
 thread_exit:
     multiwifi_frame_parser_free(parser);
+
+    g_mutex_lock(&self->mutex);
+    if (self->running) {
+        self->running = FALSE;
+        self->state = MULTIWIFI_BONDING_STATE_FAILED;
+    }
+    g_mutex_unlock(&self->mutex);
+
     return NULL;
 }
 

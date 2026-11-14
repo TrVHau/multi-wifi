@@ -183,16 +183,32 @@ gboolean multiwifi_routing_manager_check_conflicts(MultiWifiRoutingManager *self
         }
 
         /* Check if proposed rule preference already exists in kernel */
-        gboolean rule_exists = FALSE;
-        if (!multiwifi_netlink_verify_rule(nl_fd, u->table_id, u->src_rule_pref, &rule_exists, error)) {
-            multiwifi_netlink_close(nl_fd);
-            return FALSE;
+        if (u->ipv4_address != NULL && *u->ipv4_address != '\0') {
+            gboolean rule_exists = FALSE;
+            if (!multiwifi_netlink_verify_rule(nl_fd, u->table_id, u->src_rule_pref, &rule_exists, error)) {
+                multiwifi_netlink_close(nl_fd);
+                return FALSE;
+            }
+            if (rule_exists) {
+                g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                            "Routing conflict: Rule priority %u already exists in RPDB", u->src_rule_pref);
+                multiwifi_netlink_close(nl_fd);
+                return FALSE;
+            }
         }
-        if (rule_exists) {
-            g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                        "Routing conflict: Rule priority %u already exists in RPDB", u->src_rule_pref);
-            multiwifi_netlink_close(nl_fd);
-            return FALSE;
+
+        if (u->fwmark > 0) {
+            gboolean fwrule_exists = FALSE;
+            if (!multiwifi_netlink_verify_rule(nl_fd, u->table_id, u->fwmark_rule_pref, &fwrule_exists, error)) {
+                multiwifi_netlink_close(nl_fd);
+                return FALSE;
+            }
+            if (fwrule_exists) {
+                g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                            "Routing conflict: Rule priority %u already exists in RPDB", u->fwmark_rule_pref);
+                multiwifi_netlink_close(nl_fd);
+                return FALSE;
+            }
         }
     }
 
@@ -347,19 +363,37 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
     for (guint i = 0; i < plan->uplinks->len; i++) {
         MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, i);
 
-        gboolean rule_ok = FALSE;
-        if (!multiwifi_netlink_verify_rule(nl_fd, u->table_id, u->src_rule_pref, &rule_ok, error) || !rule_ok) {
-            g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                        "Verification failed: Rule pref %u not found in kernel RPDB", u->src_rule_pref);
-            verify_ok = FALSE;
-            break;
+        if (u->ipv4_address != NULL && *u->ipv4_address != '\0') {
+            gboolean rule_ok = FALSE;
+            if (!multiwifi_netlink_verify_rule(nl_fd, u->table_id, u->src_rule_pref, &rule_ok, error) || !rule_ok) {
+                if (error != NULL && *error == NULL) {
+                    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                "Verification failed: Rule pref %u not found in kernel RPDB", u->src_rule_pref);
+                }
+                verify_ok = FALSE;
+                break;
+            }
+        }
+
+        if (u->fwmark > 0) {
+            gboolean fw_rule_ok = FALSE;
+            if (!multiwifi_netlink_verify_rule(nl_fd, u->table_id, u->fwmark_rule_pref, &fw_rule_ok, error) || !fw_rule_ok) {
+                if (error != NULL && *error == NULL) {
+                    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                "Verification failed: Fwmark rule pref %u not found in kernel RPDB", u->fwmark_rule_pref);
+                }
+                verify_ok = FALSE;
+                break;
+            }
         }
 
         gboolean route_ok = FALSE;
         if (!multiwifi_netlink_verify_route(nl_fd, u->table_id, u->gateway, u->ifname, &route_ok, error) || !route_ok) {
-            g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                        "Verification failed: Default route in table %u via %s dev %s missing",
-                        u->table_id, u->gateway, u->ifname);
+            if (error != NULL && *error == NULL) {
+                g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                            "Verification failed: Default route in table %u via %s dev %s missing",
+                            u->table_id, u->gateway, u->ifname);
+            }
             verify_ok = FALSE;
             break;
         }

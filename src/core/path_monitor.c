@@ -264,7 +264,7 @@ void multiwifi_path_monitor_set_probe_func(MultiWifiPathMonitor *self,
 
 static PathEntry *find_entry_locked(MultiWifiPathMonitor *self, const gchar *ifname)
 {
-    if (ifname == NULL) {
+    if (ifname == NULL || self->paths == NULL) {
         return NULL;
     }
     for (guint i = 0; i < self->paths->len; i++) {
@@ -314,19 +314,31 @@ static gboolean default_socket_probe(const gchar *ifname,
         memset(&local_addr, 0, sizeof(local_addr));
         local_addr.sin_family = AF_INET;
         if (inet_pton(AF_INET, clean_ip, &local_addr.sin_addr) == 1) {
-            bind(sock, (struct sockaddr *)&local_addr, sizeof(local_addr));
+            if (bind(sock, (struct sockaddr *)&local_addr, sizeof(local_addr)) < 0) {
+                g_free(clean_ip);
+                close(sock);
+                return FALSE;
+            }
         }
         g_free(clean_ip);
+    }
+
+    gchar *clean_target = g_strdup(target_ip);
+    gchar *target_slash = strchr(clean_target, '/');
+    if (target_slash != NULL) {
+        *target_slash = '\0';
     }
 
     struct sockaddr_in dest_addr;
     memset(&dest_addr, 0, sizeof(dest_addr));
     dest_addr.sin_family = AF_INET;
     dest_addr.sin_port = htons(53); /* DNS port probe */
-    if (inet_pton(AF_INET, target_ip, &dest_addr.sin_addr) != 1) {
+    if (inet_pton(AF_INET, clean_target, &dest_addr.sin_addr) != 1) {
+        g_free(clean_target);
         close(sock);
         return FALSE;
     }
+    g_free(clean_target);
 
     int res = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     gboolean success = FALSE;
@@ -486,6 +498,11 @@ void multiwifi_path_monitor_probe_all_now(MultiWifiPathMonitor *self)
     }
 
     g_mutex_lock(&self->mutex);
+    if (self->paths == NULL) {
+        g_mutex_unlock(&self->mutex);
+        return;
+    }
+
     MultiWifiProbeFunc probe_fn = self->custom_probe_fn ? self->custom_probe_fn : default_socket_probe;
     gpointer probe_data = self->custom_probe_data;
 
@@ -570,7 +587,7 @@ void multiwifi_path_monitor_probe_all_async(MultiWifiPathMonitor *self)
     }
 
     g_mutex_lock(&self->mutex);
-    if (self->probing_in_flight) {
+    if (self->probing_in_flight || self->paths == NULL) {
         g_mutex_unlock(&self->mutex);
         return;
     }
@@ -645,6 +662,11 @@ void multiwifi_path_monitor_update_device(MultiWifiPathMonitor *self,
     }
 
     g_mutex_lock(&self->mutex);
+    if (self->paths == NULL) {
+        g_mutex_unlock(&self->mutex);
+        return;
+    }
+
     PathEntry *entry = find_entry_locked(self, device->ifname);
     if (entry == NULL) {
         entry = path_entry_new(device->ifname);
@@ -683,6 +705,11 @@ void multiwifi_path_monitor_remove_device(MultiWifiPathMonitor *self,
     }
 
     g_mutex_lock(&self->mutex);
+    if (self->paths == NULL) {
+        g_mutex_unlock(&self->mutex);
+        return;
+    }
+
     for (guint i = 0; i < self->paths->len; i++) {
         PathEntry *e = g_ptr_array_index(self->paths, i);
         if (g_strcmp0(e->info->ifname, ifname) == 0) {
@@ -702,6 +729,11 @@ GPtrArray *multiwifi_path_monitor_dup_paths(MultiWifiPathMonitor *self)
     }
 
     g_mutex_lock(&self->mutex);
+    if (self->paths == NULL) {
+        g_mutex_unlock(&self->mutex);
+        return NULL;
+    }
+
     GPtrArray *dup = g_ptr_array_new_full(self->paths->len, (GDestroyNotify)multiwifi_path_info_free);
     for (guint i = 0; i < self->paths->len; i++) {
         PathEntry *e = g_ptr_array_index(self->paths, i);
@@ -721,9 +753,11 @@ MultiWifiPathInfo *multiwifi_path_monitor_find_path(MultiWifiPathMonitor *self,
 
     MultiWifiPathInfo *found = NULL;
     g_mutex_lock(&self->mutex);
-    PathEntry *entry = find_entry_locked(self, ifname);
-    if (entry != NULL) {
-        found = multiwifi_path_info_copy(entry->info);
+    if (self->paths != NULL) {
+        PathEntry *entry = find_entry_locked(self, ifname);
+        if (entry != NULL) {
+            found = multiwifi_path_info_copy(entry->info);
+        }
     }
     g_mutex_unlock(&self->mutex);
 

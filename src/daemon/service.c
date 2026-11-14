@@ -799,6 +799,9 @@ static void multiwifi_daemon_service_dispose(GObject *object)
         g_clear_object(&self->op_manager);
     }
     if (self->routing_mgr != NULL) {
+        if (multiwifi_routing_manager_is_active(self->routing_mgr)) {
+            multiwifi_routing_manager_teardown(self->routing_mgr, "daemon-dispose", NULL, NULL);
+        }
         g_clear_object(&self->routing_mgr);
     }
     if (self->node_info != NULL) {
