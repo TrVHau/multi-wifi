@@ -25,21 +25,25 @@ pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0>=2.74)
 pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0>=2.74)
 pkg_check_modules(GIO_UNIX REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.74)
 pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4>=4.10)
+pkg_check_modules(NM REQUIRED IMPORTED_TARGET libnm>=1.40)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Core library (pure logic, logging, capabilities, config parsing)
+# Core library (pure logic, logging, capabilities, config parsing, Wi-Fi inventory)
 add_library(multiwifi-core STATIC
     src/core/logging.c
     src/core/capabilities.c
     src/core/config.c
+    src/core/wifi_device.c
+    src/core/wifi_inventory.c
 )
 target_link_libraries(multiwifi-core PUBLIC
     PkgConfig::GLIB
     PkgConfig::GIO
     PkgConfig::GIO_UNIX
+    PkgConfig::NM
 )
 target_include_directories(multiwifi-core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

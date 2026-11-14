@@ -22,7 +22,8 @@ jobs:
             ninja-build \
             pkg-config \
             libglib2.0-dev \
-            libgtk-4-dev
+            libgtk-4-dev \
+            libnm-dev
 
       - name: Configure CMake
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
