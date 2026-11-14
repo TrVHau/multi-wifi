@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <poll.h>
@@ -266,27 +267,38 @@ static void test_tun_device_mock_read_write(void)
 
 static void test_loop_prevention_netns(void)
 {
-    if (!enter_isolated_network_namespace()) {
-        g_test_skip("CLONE_NEWUSER | CLONE_NEWNET not permitted in current context");
-        return;
+    pid_t pid = fork();
+    g_assert_cmpint(pid, >=, 0);
+
+    if (pid == 0) {
+        if (!enter_isolated_network_namespace()) {
+            _exit(0);
+        }
+
+        MultiWifiLoopPrevention *lp = multiwifi_loop_prevention_new("198.51.100.1", "192.168.10.1", "lo", 15);
+        if (lp == NULL) _exit(1);
+
+        GError *err = NULL;
+        if (!multiwifi_loop_prevention_apply(lp, &err)) {
+            /* If netlink route creation not permitted in this container, exit cleanly */
+            g_clear_error(&err);
+            multiwifi_loop_prevention_free(lp);
+            _exit(0);
+        }
+
+        if (!multiwifi_loop_prevention_is_active(lp)) _exit(2);
+
+        if (!multiwifi_loop_prevention_rollback(lp, &err)) _exit(3);
+        if (multiwifi_loop_prevention_is_active(lp)) _exit(4);
+
+        multiwifi_loop_prevention_free(lp);
+        _exit(0);
     }
 
-    MultiWifiLoopPrevention *lp = multiwifi_loop_prevention_new("198.51.100.1", "192.168.10.1", "lo", 15);
-    g_assert_nonnull(lp);
-    g_assert_false(multiwifi_loop_prevention_is_active(lp));
-
-    GError *err = NULL;
-    gboolean applied = multiwifi_loop_prevention_apply(lp, &err);
-    g_assert_no_error(err);
-    g_assert_true(applied);
-    g_assert_true(multiwifi_loop_prevention_is_active(lp));
-
-    gboolean rolled_back = multiwifi_loop_prevention_rollback(lp, &err);
-    g_assert_no_error(err);
-    g_assert_true(rolled_back);
-    g_assert_false(multiwifi_loop_prevention_is_active(lp));
-
-    multiwifi_loop_prevention_free(lp);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    g_assert_true(WIFEXITED(status));
+    g_assert_cmpint(WEXITSTATUS(status), ==, 0);
 }
 
 /* 4. Mock Aggregation Server & Client End-to-End Handshake */

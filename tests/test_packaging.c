@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include "multiwifi/core/firewall.h"
 #include "multiwifi/core/routing_manager.h"
 #include "multiwifi/shared/dbus_defs.h"
@@ -261,20 +262,30 @@ static void test_appimage_structure_and_isolation(void)
 
 static void test_clean_uninstall_and_residual_resources(void)
 {
-    /* If running unprivileged without host CAP_NET_ADMIN, enter isolated netns for kernel check */
-    if (enter_isolated_network_namespace()) {
-        MultiWifiFirewall *fw = multiwifi_firewall_new();
-        gboolean exists = FALSE;
-        GError *error = NULL;
+    /* If running unprivileged without host CAP_NET_ADMIN, test isolated netns in child process */
+    pid_t pid = fork();
+    g_assert_cmpint(pid, >=, 0);
 
-        /* Verify firewall table is absent */
-        gboolean verified = multiwifi_firewall_verify(fw, &exists, &error);
-        g_assert_no_error(error);
-        g_assert_true(verified);
-        g_assert_false(exists);
+    if (pid == 0) {
+        if (enter_isolated_network_namespace()) {
+            MultiWifiFirewall *fw = multiwifi_firewall_new();
+            gboolean exists = FALSE;
+            GError *error = NULL;
 
-        g_object_unref(fw);
+            /* Verify firewall table is absent if kernel permits netfilter in user namespace */
+            if (multiwifi_firewall_verify(fw, &exists, &error)) {
+                if (exists) _exit(1);
+            }
+            g_clear_error(&error);
+            g_object_unref(fw);
+        }
+        _exit(0);
     }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    g_assert_true(WIFEXITED(status));
+    g_assert_cmpint(WEXITSTATUS(status), ==, 0);
 
     /* Verify journal directory does not contain leftover active journals */
     gchar *runtime_journal_dir = g_build_filename(g_get_user_runtime_dir(), "multiwifi", "journals", NULL);

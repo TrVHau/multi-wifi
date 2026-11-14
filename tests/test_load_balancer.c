@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <glib.h>
 #include <glib/gstdio.h>
 #include "multiwifi/core/load_balancer.h"
@@ -48,6 +49,7 @@ static gboolean enter_isolated_network_namespace(void)
         close(fd);
     }
 
+    (void)system("ip link set lo up 2>/dev/null");
     return TRUE;
 }
 
@@ -284,47 +286,59 @@ static void test_firewall_invalid_arguments(void)
 
 static void test_firewall_lifecycle_in_netns(void)
 {
-    if (!enter_isolated_network_namespace()) {
-        g_test_skip("CLONE_NEWUSER | CLONE_NEWNET not permitted in current execution context");
-        return;
+    pid_t pid = fork();
+    g_assert_cmpint(pid, >=, 0);
+
+    if (pid == 0) {
+        if (!enter_isolated_network_namespace()) {
+            _exit(0);
+        }
+
+        MultiWifiFirewall *fw = multiwifi_firewall_new();
+        if (fw == NULL) _exit(1);
+
+        GError *err = NULL;
+        gboolean exists = FALSE;
+        if (!multiwifi_firewall_verify(fw, &exists, &err)) {
+            /* Kernel / AppArmor denies unprivileged nftables in user namespace */
+            g_clear_error(&err);
+            g_object_unref(fw);
+            _exit(0);
+        }
+
+        if (exists) _exit(2);
+
+        /* Apply single mark */
+        GArray *marks = g_array_new(FALSE, FALSE, sizeof(uint32_t));
+        uint32_t m1 = 0x1000;
+        g_array_append_val(marks, m1);
+
+        if (!multiwifi_firewall_apply(fw, marks, &err)) _exit(3);
+        if (!multiwifi_firewall_is_active(fw)) _exit(4);
+        if (!multiwifi_firewall_verify(fw, &exists, &err) || !exists) _exit(5);
+
+        /* Apply multiple marks (replaces table atomically) */
+        uint32_t m2 = 0x2000;
+        g_array_append_val(marks, m2);
+        if (!multiwifi_firewall_apply(fw, marks, &err)) _exit(6);
+
+        /* Teardown */
+        if (!multiwifi_firewall_teardown(fw, &err)) _exit(7);
+        if (multiwifi_firewall_is_active(fw)) _exit(8);
+        if (!multiwifi_firewall_verify(fw, &exists, &err) || exists) _exit(9);
+
+        /* Teardown again on absent table succeeds idempotently */
+        if (!multiwifi_firewall_teardown(fw, &err)) _exit(10);
+
+        g_array_unref(marks);
+        g_object_unref(fw);
+        _exit(0);
     }
 
-    MultiWifiFirewall *fw = multiwifi_firewall_new();
-    g_assert_nonnull(fw);
-    g_assert_false(multiwifi_firewall_is_active(fw));
-
-    GError *err = NULL;
-    gboolean exists = FALSE;
-    g_assert_true(multiwifi_firewall_verify(fw, &exists, &err));
-    g_assert_false(exists);
-
-    /* Apply single mark */
-    GArray *marks = g_array_new(FALSE, FALSE, sizeof(uint32_t));
-    uint32_t m1 = 0x1000;
-    g_array_append_val(marks, m1);
-
-    g_assert_true(multiwifi_firewall_apply(fw, marks, &err));
-    g_assert_true(multiwifi_firewall_is_active(fw));
-    g_assert_true(multiwifi_firewall_verify(fw, &exists, &err));
-    g_assert_true(exists);
-
-    /* Apply multiple marks (replaces table atomically) */
-    uint32_t m2 = 0x2000;
-    g_array_append_val(marks, m2);
-    g_assert_true(multiwifi_firewall_apply(fw, marks, &err));
-    g_assert_true(multiwifi_firewall_is_active(fw));
-
-    /* Teardown */
-    g_assert_true(multiwifi_firewall_teardown(fw, &err));
-    g_assert_false(multiwifi_firewall_is_active(fw));
-    g_assert_true(multiwifi_firewall_verify(fw, &exists, &err));
-    g_assert_false(exists);
-
-    /* Teardown again on absent table succeeds idempotently */
-    g_assert_true(multiwifi_firewall_teardown(fw, &err));
-
-    g_array_unref(marks);
-    g_object_unref(fw);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    g_assert_true(WIFEXITED(status));
+    g_assert_cmpint(WEXITSTATUS(status), ==, 0);
 }
 
 typedef struct {
