@@ -31,19 +31,21 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Core library (pure logic, logging, capabilities, config parsing, Wi-Fi inventory)
+# Core library (pure logic, logging, capabilities, config parsing, Wi-Fi inventory, path monitor)
 add_library(multiwifi-core STATIC
     src/core/logging.c
     src/core/capabilities.c
     src/core/config.c
     src/core/wifi_device.c
     src/core/wifi_inventory.c
+    src/core/path_monitor.c
 )
 target_link_libraries(multiwifi-core PUBLIC
     PkgConfig::GLIB
     PkgConfig::GIO
     PkgConfig::GIO_UNIX
     PkgConfig::NM
+    m
 )
 target_include_directories(multiwifi-core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

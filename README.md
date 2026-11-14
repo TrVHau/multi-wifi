@@ -78,7 +78,7 @@ ctest --test-dir build --output-on-failure --verbose
 
 - [x] **Phase 0:** Foundation — Clean C11/GTK4 build system, logging with secret redaction, capability inspection, config schema/validation, unit tests and CI.
 - [x] **Phase 1:** Wi-Fi inventory — Read-only libnm integration; detect and list adapters, connection states, signal strength, SSID, IPv4/IPv6 addresses and gateways.
-- [ ] **Phase 2:** Path monitor (probe uplinks, health & hysteresis).
+- [x] **Phase 2:** Path monitor — Independent uplink probing, unprivileged non-blocking reachability tests, RTT/jitter estimation, rolling loss calculation, hysteresis and recovery streaks.
 - [ ] **Phase 3:** System daemon (D-Bus, polkit, lifecycle).
 - [ ] **Phase 4:** Routing transaction manager (plan, verify, rollback in namespaces).
 - [ ] **Phase 5:** Load balancing (nftables, conntrack marks, policy routing).

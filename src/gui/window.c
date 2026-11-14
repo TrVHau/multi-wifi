@@ -1,6 +1,7 @@
 #include "window.h"
 #include "multiwifi/core/capabilities.h"
 #include "multiwifi/core/wifi_inventory.h"
+#include "multiwifi/core/path_monitor.h"
 #include "multiwifi/version.h"
 
 struct _MultiWifiWindow {
@@ -8,6 +9,7 @@ struct _MultiWifiWindow {
     GtkWidget *caps_label;
     GtkWidget *devices_box;
     MultiWifiInventory *inventory;
+    MultiWifiPathMonitor *path_monitor;
 };
 
 G_DEFINE_TYPE(MultiWifiWindow, multiwifi_window, GTK_TYPE_APPLICATION_WINDOW)
@@ -41,6 +43,8 @@ static void update_devices_ui(MultiWifiWindow *self)
 
     for (guint i = 0; i < devices->len; i++) {
         MultiWifiDeviceInfo *info = g_ptr_array_index(devices, i);
+        MultiWifiPathInfo *path = self->path_monitor ?
+            multiwifi_path_monitor_find_path(self->path_monitor, info->ifname) : NULL;
 
         GtkWidget *card_frame = gtk_frame_new(NULL);
         GtkWidget *card_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
@@ -49,7 +53,7 @@ static void update_devices_ui(MultiWifiWindow *self)
         gtk_widget_set_margin_start(card_box, 12);
         gtk_widget_set_margin_end(card_box, 12);
 
-        /* Header row: Device Name, Type, and Status Badge */
+        /* Header row: Device Name, Type, and Path Status Badge */
         GtkWidget *header_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
 
         const gchar *type_desc = "PCIe/Internal";
@@ -72,17 +76,29 @@ static void update_devices_ui(MultiWifiWindow *self)
 
         /* Status badge */
         GtkWidget *badge_lbl = gtk_label_new(NULL);
-        if (info->state == MULTIWIFI_DEVICE_STATE_CONNECTED) {
+        if (path != NULL) {
+            if (path->state == MULTIWIFI_PATH_STATE_ONLINE) {
+                gtk_label_set_markup(GTK_LABEL(badge_lbl),
+                    "<span foreground='#4caf50' weight='bold'>● Online</span>");
+            } else if (path->state == MULTIWIFI_PATH_STATE_DEGRADED) {
+                gtk_label_set_markup(GTK_LABEL(badge_lbl),
+                    "<span foreground='#ff9800' weight='bold'>▲ Degraded</span>");
+            } else if (path->state == MULTIWIFI_PATH_STATE_LOCAL_ONLY) {
+                gtk_label_set_markup(GTK_LABEL(badge_lbl),
+                    "<span foreground='#f44336' weight='bold'>✕ Local Only</span>");
+            } else if (path->state == MULTIWIFI_PATH_STATE_PROBING) {
+                gtk_label_set_markup(GTK_LABEL(badge_lbl),
+                    "<span foreground='#2196f3'>◌ Probing</span>");
+            } else {
+                gtk_label_set_markup(GTK_LABEL(badge_lbl),
+                    "<span foreground='#888888'>○ Offline</span>");
+            }
+        } else if (info->state == MULTIWIFI_DEVICE_STATE_CONNECTED) {
             gtk_label_set_markup(GTK_LABEL(badge_lbl),
                 "<span foreground='#4caf50' weight='bold'>● Connected</span>");
-        } else if (info->state == MULTIWIFI_DEVICE_STATE_DISCONNECTED) {
-            gtk_label_set_markup(GTK_LABEL(badge_lbl),
-                "<span foreground='#ff9800' weight='bold'>○ Disconnected</span>");
         } else {
-            gchar *state_markup = g_strdup_printf("<span foreground='#9e9e9e'>%s</span>",
-                                                 info->state_str ? info->state_str : "Unknown");
-            gtk_label_set_markup(GTK_LABEL(badge_lbl), state_markup);
-            g_free(state_markup);
+            gtk_label_set_markup(GTK_LABEL(badge_lbl),
+                "<span foreground='#888888'>○ Disconnected</span>");
         }
         gtk_box_append(GTK_BOX(header_row), badge_lbl);
         gtk_box_append(GTK_BOX(card_box), header_row);
@@ -109,8 +125,38 @@ static void update_devices_ui(MultiWifiWindow *self)
             gtk_label_set_markup(GTK_LABEL(details_lbl),
                 "<span size='small' color='#777'><i>Adapter is idle. Ready to associate.</i></span>");
         }
-
         gtk_box_append(GTK_BOX(card_box), details_lbl);
+
+        /* Path Metrics row (Phase 2 diagnostics) */
+        if (path != NULL && path->state != MULTIWIFI_PATH_STATE_OFFLINE) {
+            GtkWidget *metrics_lbl = gtk_label_new(NULL);
+            gtk_label_set_xalign(GTK_LABEL(metrics_lbl), 0.0f);
+
+            const gchar *eligibility_str = path->is_eligible
+                ? "<span foreground='#4caf50'>Eligible</span>"
+                : "<span foreground='#e91e63'>Excluded</span>";
+
+            gchar *metrics_markup = g_strdup_printf(
+                "<span size='small' color='#aaa'>"
+                "<b>Path Diagnostics:</b> RTT: <b>%.1f ms</b> (min: %.1f, max: %.1f, jitter: %.1f) | "
+                "Loss: <b>%u%%</b> | Status: <b>%s</b> | Steering: %s</span>",
+                path->rtt_ms,
+                path->min_rtt_ms,
+                path->max_rtt_ms,
+                path->jitter_ms,
+                path->packet_loss_percent,
+                path->status_reason ? path->status_reason : "N/A",
+                eligibility_str
+            );
+            gtk_label_set_markup(GTK_LABEL(metrics_lbl), metrics_markup);
+            g_free(metrics_markup);
+            gtk_box_append(GTK_BOX(card_box), metrics_lbl);
+        }
+
+        if (path != NULL) {
+            multiwifi_path_info_free(path);
+        }
+
         gtk_frame_set_child(GTK_FRAME(card_frame), card_box);
         gtk_box_append(GTK_BOX(self->devices_box), card_frame);
     }
@@ -120,7 +166,25 @@ static void update_devices_ui(MultiWifiWindow *self)
 
 static void on_inventory_devices_changed(MultiWifiInventory *inv, gpointer user_data)
 {
-    (void)inv;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+
+    if (self->path_monitor != NULL && inv != NULL) {
+        GPtrArray *devices = multiwifi_inventory_dup_devices(inv);
+        if (devices != NULL) {
+            for (guint i = 0; i < devices->len; i++) {
+                MultiWifiDeviceInfo *d = g_ptr_array_index(devices, i);
+                multiwifi_path_monitor_update_device(self->path_monitor, d);
+            }
+            g_ptr_array_unref(devices);
+        }
+    }
+
+    update_devices_ui(self);
+}
+
+static void on_paths_changed(MultiWifiPathMonitor *mon, gpointer user_data)
+{
+    (void)mon;
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
     update_devices_ui(self);
 }
@@ -128,6 +192,12 @@ static void on_inventory_devices_changed(MultiWifiInventory *inv, gpointer user_
 static void multiwifi_window_dispose(GObject *object)
 {
     MultiWifiWindow *self = MULTIWIFI_WINDOW(object);
+
+    if (self->path_monitor != NULL) {
+        multiwifi_path_monitor_stop(self->path_monitor);
+        g_signal_handlers_disconnect_by_data(self->path_monitor, self);
+        g_clear_object(&self->path_monitor);
+    }
 
     if (self->inventory != NULL) {
         g_signal_handlers_disconnect_by_data(self->inventory, self);
@@ -140,7 +210,7 @@ static void multiwifi_window_dispose(GObject *object)
 static void multiwifi_window_init(MultiWifiWindow *self)
 {
     gtk_window_set_title(GTK_WINDOW(self), "MultiWiFi");
-    gtk_window_set_default_size(GTK_WINDOW(self), 700, 520);
+    gtk_window_set_default_size(GTK_WINDOW(self), 720, 560);
 
     /* Header Bar */
     GtkWidget *header = gtk_header_bar_new();
@@ -198,7 +268,7 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     gtk_box_append(GTK_BOX(main_box), caps_frame);
 
     /* Managed Wi-Fi Uplinks List */
-    GtkWidget *status_frame = gtk_frame_new("Discovered Wi-Fi Adapters");
+    GtkWidget *status_frame = gtk_frame_new("Discovered Uplinks & Path Quality");
     self->devices_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_widget_set_margin_top(self->devices_box, 12);
     gtk_widget_set_margin_bottom(self->devices_box, 12);
@@ -208,7 +278,13 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     gtk_frame_set_child(GTK_FRAME(status_frame), self->devices_box);
     gtk_box_append(GTK_BOX(main_box), status_frame);
 
-    /* Initialize Inventory */
+    /* Initialize Path Monitor (Phase 2) */
+    self->path_monitor = multiwifi_path_monitor_new();
+    g_signal_connect(self->path_monitor, "paths-changed",
+                     G_CALLBACK(on_paths_changed), self);
+    multiwifi_path_monitor_start(self->path_monitor);
+
+    /* Initialize Inventory (Phase 1) */
     self->inventory = multiwifi_inventory_new();
     g_signal_connect(self->inventory, "devices-changed",
                      G_CALLBACK(on_inventory_devices_changed), self);
@@ -220,7 +296,7 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     /* Status Bar Footer */
     GtkWidget *footer_label = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(footer_label),
-        "<span size='small' color='#888'>MultiWiFi " MULTIWIFI_VERSION_STRING " | Unprivileged Mode | Phase 1 (Inventory)</span>");
+        "<span size='small' color='#888'>MultiWiFi " MULTIWIFI_VERSION_STRING " | Unprivileged Mode | Phase 2 (Path Monitor)</span>");
     gtk_widget_set_halign(footer_label, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(main_box), footer_label);
 
