@@ -17,3 +17,7 @@ add_test(NAME test_path_monitor COMMAND test_path_monitor)
 add_executable(test_dbus_daemon test_dbus_daemon.c)
 target_link_libraries(test_dbus_daemon PRIVATE multiwifi-core)
 add_test(NAME test_dbus_daemon COMMAND test_dbus_daemon)
+
+add_executable(test_routing_manager test_routing_manager.c)
+target_link_libraries(test_routing_manager PRIVATE multiwifi-core)
+add_test(NAME test_routing_manager COMMAND test_routing_manager)

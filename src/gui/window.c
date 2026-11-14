@@ -396,7 +396,7 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     /* Status Bar Footer */
     GtkWidget *footer_label = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(footer_label),
-        "<span size='small' color='#888'>MultiWiFi " MULTIWIFI_VERSION_STRING " | Unprivileged Mode | Phase 3 (System Daemon)</span>");
+        "<span size='small' color='#888'>MultiWiFi " MULTIWIFI_VERSION_STRING " | Unprivileged Mode | Phase 4 (Routing Transaction Manager)</span>");
     gtk_widget_set_halign(footer_label, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(main_box), footer_label);
 

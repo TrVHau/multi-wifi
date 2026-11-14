@@ -83,7 +83,7 @@ sudo ./build/multiwifi-daemon
 - [x] **Phase 1:** Wi-Fi inventory — Read-only libnm integration; detect and list adapters, connection states, signal strength, SSID, IPv4/IPv6 addresses and gateways.
 - [x] **Phase 2:** Path monitor — Independent uplink probing, unprivileged non-blocking reachability tests, RTT/jitter estimation, rolling loss calculation, hysteresis and recovery streaks.
 - [x] **Phase 3:** System daemon — D-Bus service (`io.github.multiwifi.Daemon`), polkit action (`io.github.multiwifi.modify`), operation lifecycle state machine (`QUEUED` -> `VALIDATING` -> `APPLYING` -> `VERIFYING` -> `SUCCEEDED` / `ROLLING_BACK` -> `FAILED`), IPC methods/signals, and systemd service unit.
-- [ ] **Phase 4:** Routing transaction manager (plan, verify, rollback in namespaces).
+- [x] **Phase 4:** Routing transaction manager — Plan generation, conflict detection, rtnetlink socket backend, transactional journal on disk, readback verification, atomic rollback on failure, crash-recovery reconciliation, and isolated network namespace integration tests.
 - [ ] **Phase 5:** Load balancing (nftables, conntrack marks, policy routing).
 - [ ] **Phase 6:** Bonding (MPTCP, TUN encapsulation, remote endpoint).
 - [ ] **Phase 7:** Packaging and release.

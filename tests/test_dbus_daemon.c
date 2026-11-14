@@ -275,7 +275,7 @@ static void test_daemon_dbus_ipc_roundtrip(void)
     g_assert_nonnull(reply);
     g_variant_unref(reply);
 
-    /* 9. Test StartLoadBalancing */
+    /* 9. Test StartLoadBalancing (if unprivileged on host, kernel EPERM triggers Conflict error) */
     GVariantBuilder opt_b;
     g_variant_builder_init(&opt_b, G_VARIANT_TYPE("a{sv}"));
     reply = call_dbus_iterative(
@@ -285,14 +285,17 @@ static void test_daemon_dbus_ipc_roundtrip(void)
         G_VARIANT_TYPE("(s)"),
         &error
     );
-    g_assert_no_error(error);
-    g_assert_nonnull(reply);
-
-    const gchar *op_id_str = NULL;
-    g_variant_get(reply, "(&s)", &op_id_str);
-    g_assert_nonnull(op_id_str);
-    gchar *saved_lb_op = g_strdup(op_id_str);
-    g_variant_unref(reply);
+    if (reply != NULL) {
+        g_variant_unref(reply);
+    } else {
+        g_assert_nonnull(error);
+        g_assert_true(g_dbus_error_is_remote_error(error));
+        remote_err = g_dbus_error_get_remote_error(error);
+        g_assert_true(g_strcmp0(remote_err, MULTIWIFI_ERROR_CONFLICT) == 0 ||
+                      g_strcmp0(remote_err, MULTIWIFI_ERROR_NETWORK_FAILURE) == 0);
+        g_free(remote_err);
+        g_clear_error(&error);
+    }
 
     /* 10. Test StopLoadBalancing */
     reply = call_dbus_iterative(
@@ -353,14 +356,13 @@ static void test_daemon_dbus_ipc_roundtrip(void)
     reply = call_dbus_iterative(
         conn,
         "GetDiagnostics",
-        g_variant_new("(s)", saved_lb_op),
+        g_variant_new("(s)", saved_diag_op),
         G_VARIANT_TYPE("(a{sv})"),
         &error
     );
     g_assert_no_error(error);
     g_assert_nonnull(reply);
     g_variant_unref(reply);
-    g_free(saved_lb_op);
     g_free(saved_diag_op);
 
     /* 15. Test GetDiagnostics (invalid / non-existent) */

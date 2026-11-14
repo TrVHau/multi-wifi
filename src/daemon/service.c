@@ -2,6 +2,7 @@
 #include "multiwifi/shared/dbus_defs.h"
 #include "multiwifi/core/logging.h"
 #include "multiwifi/core/capabilities.h"
+#include "multiwifi/core/routing_manager.h"
 #include "multiwifi/version.h"
 #include <polkit/polkit.h>
 #include <string.h>
@@ -88,6 +89,7 @@ struct _MultiWifiDaemonService {
     MultiWifiInventory *inventory;
     MultiWifiPathMonitor *path_monitor;
     MultiWifiOpManager *op_manager;
+    MultiWifiRoutingManager *routing_mgr;
     GDBusNodeInfo *node_info;
 };
 
@@ -252,11 +254,13 @@ static void handle_method_call(GDBusConnection *connection,
 
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(@aa{sv})", g_variant_builder_end(&b)));
     } else if (g_strcmp0(method_name, "GetStatus") == 0) {
+        gboolean is_active = multiwifi_routing_manager_is_active(self->routing_mgr);
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
         g_variant_builder_add(&b, "{sv}", "version", g_variant_new_string(MULTIWIFI_VERSION_STRING));
-        g_variant_builder_add(&b, "{sv}", "mode", g_variant_new_string("idle"));
+        g_variant_builder_add(&b, "{sv}", "mode", g_variant_new_string(is_active ? "load_balancing" : "idle"));
         g_variant_builder_add(&b, "{sv}", "daemon_running", g_variant_new_boolean(TRUE));
+        g_variant_builder_add(&b, "{sv}", "routing_active", g_variant_new_boolean(is_active));
         g_variant_builder_add(&b, "{sv}", "polkit_enforced", g_variant_new_boolean(self->enable_polkit));
 
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(@a{sv})", g_variant_builder_end(&b)));
@@ -272,9 +276,48 @@ static void handle_method_call(GDBusConnection *connection,
         }
 
         gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StartLoadBalancing");
-        multiwifi_op_manager_update(self->op_manager, op_id, MULTIWIFI_OP_STATE_VALIDATING, 20, "Validating routing parameters");
-        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Load balancing prepared (Phase 3)");
+        GPtrArray *devs = multiwifi_inventory_dup_devices(self->inventory);
+        MultiWifiRoutePlan *plan = multiwifi_route_plan_new();
 
+        if (devs != NULL) {
+            uint32_t idx = 0;
+            for (guint i = 0; i < devs->len; i++) {
+                MultiWifiDeviceInfo *d = g_ptr_array_index(devs, i);
+                if (d->state == MULTIWIFI_DEVICE_STATE_CONNECTED &&
+                    d->ipv4_address != NULL && *d->ipv4_address != '\0' &&
+                    d->ipv4_gateway != NULL && *d->ipv4_gateway != '\0') {
+                    multiwifi_route_plan_add_uplink(plan, d->ifname, (uint32_t)d->ifindex,
+                                                    d->ipv4_address, d->ipv4_gateway, idx++);
+                }
+            }
+            g_ptr_array_unref(devs);
+        }
+
+        if (plan->uplinks->len == 0) {
+            multiwifi_route_plan_free(plan);
+            multiwifi_op_manager_finish(self->op_manager, op_id, FALSE, NULL,
+                                        "No connected Wi-Fi interfaces with IPv4 default gateway");
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NETWORK_FAILURE,
+                "No connected Wi-Fi interfaces with IPv4 default gateway found"
+            );
+            g_free(op_id);
+            return;
+        }
+
+        GError *plan_err = NULL;
+        if (!multiwifi_routing_manager_apply_plan(self->routing_mgr, op_id, plan, self->op_manager, &plan_err)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_CONFLICT,
+                plan_err ? plan_err->message : "Routing transaction failed"
+            );
+            g_clear_error(&plan_err);
+            multiwifi_route_plan_free(plan);
+            g_free(op_id);
+            return;
+        }
+
+        multiwifi_route_plan_free(plan);
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
         g_free(op_id);
     } else if (g_strcmp0(method_name, "StopLoadBalancing") == 0) {
@@ -289,7 +332,16 @@ static void handle_method_call(GDBusConnection *connection,
         }
 
         gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StopLoadBalancing");
-        multiwifi_op_manager_finish(self->op_manager, op_id, TRUE, NULL, "Load balancing stopped");
+        GError *stop_err = NULL;
+        if (!multiwifi_routing_manager_teardown(self->routing_mgr, op_id, self->op_manager, &stop_err)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_ROLLBACK_FAILED,
+                stop_err ? stop_err->message : "Failed to teardown routing tables"
+            );
+            g_clear_error(&stop_err);
+            g_free(op_id);
+            return;
+        }
 
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
         g_free(op_id);
@@ -497,6 +549,9 @@ static void multiwifi_daemon_service_dispose(GObject *object)
         g_signal_handlers_disconnect_by_data(self->op_manager, self);
         g_clear_object(&self->op_manager);
     }
+    if (self->routing_mgr != NULL) {
+        g_clear_object(&self->routing_mgr);
+    }
     if (self->node_info != NULL) {
         g_dbus_node_info_unref(self->node_info);
         self->node_info = NULL;
@@ -522,6 +577,8 @@ static void multiwifi_daemon_service_init(MultiWifiDaemonService *self)
     self->inventory = multiwifi_inventory_new();
     self->path_monitor = multiwifi_path_monitor_new();
     self->op_manager = multiwifi_op_manager_new();
+    self->routing_mgr = multiwifi_routing_manager_new(NULL);
+    multiwifi_routing_manager_recover(self->routing_mgr, NULL);
 
     GError *err = NULL;
     self->node_info = g_dbus_node_info_new_for_xml(s_introspection_xml, &err);

@@ -32,7 +32,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Core library (pure logic, logging, capabilities, config parsing, Wi-Fi inventory, path monitor, D-Bus service)
+# Core library (pure logic, logging, capabilities, config parsing, Wi-Fi inventory, path monitor, D-Bus service, routing manager)
 add_library(multiwifi-core STATIC
     src/core/logging.c
     src/core/capabilities.c
@@ -41,6 +41,9 @@ add_library(multiwifi-core STATIC
     src/core/wifi_inventory.c
     src/core/path_monitor.c
     src/core/operation.c
+    src/core/journal.c
+    src/core/netlink_route.c
+    src/core/routing_manager.c
     src/daemon/service.c
 )
 target_link_libraries(multiwifi-core PUBLIC
