@@ -3,6 +3,8 @@
 #include "multiwifi/core/logging.h"
 #include "multiwifi/core/capabilities.h"
 #include "multiwifi/core/routing_manager.h"
+#include "multiwifi/core/load_balancer.h"
+#include "multiwifi/core/firewall.h"
 #include "multiwifi/version.h"
 #include <polkit/polkit.h>
 #include <string.h>
@@ -90,6 +92,8 @@ struct _MultiWifiDaemonService {
     MultiWifiPathMonitor *path_monitor;
     MultiWifiOpManager *op_manager;
     MultiWifiRoutingManager *routing_mgr;
+    MultiWifiScheduler *scheduler;
+    MultiWifiFirewall *firewall;
     GDBusNodeInfo *node_info;
 };
 
@@ -255,12 +259,16 @@ static void handle_method_call(GDBusConnection *connection,
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(@aa{sv})", g_variant_builder_end(&b)));
     } else if (g_strcmp0(method_name, "GetStatus") == 0) {
         gboolean is_active = multiwifi_routing_manager_is_active(self->routing_mgr);
+        gboolean fw_active = multiwifi_firewall_is_active(self->firewall);
+        guint eligible_paths = multiwifi_scheduler_get_eligible_count(self->scheduler);
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
         g_variant_builder_add(&b, "{sv}", "version", g_variant_new_string(MULTIWIFI_VERSION_STRING));
         g_variant_builder_add(&b, "{sv}", "mode", g_variant_new_string(is_active ? "load_balancing" : "idle"));
         g_variant_builder_add(&b, "{sv}", "daemon_running", g_variant_new_boolean(TRUE));
         g_variant_builder_add(&b, "{sv}", "routing_active", g_variant_new_boolean(is_active));
+        g_variant_builder_add(&b, "{sv}", "firewall_active", g_variant_new_boolean(fw_active));
+        g_variant_builder_add(&b, "{sv}", "eligible_uplinks", g_variant_new_uint32(eligible_paths));
         g_variant_builder_add(&b, "{sv}", "polkit_enforced", g_variant_new_boolean(self->enable_polkit));
 
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(@a{sv})", g_variant_builder_end(&b)));
@@ -317,6 +325,59 @@ static void handle_method_call(GDBusConnection *connection,
             return;
         }
 
+        /* Populate scheduler and apply firewall */
+        multiwifi_scheduler_reset(self->scheduler);
+        for (guint i = 0; i < plan->uplinks->len; i++) {
+            MultiWifiUplinkRouteConfig *up = g_ptr_array_index(plan->uplinks, i);
+            MultiWifiPathInfo *p = multiwifi_path_monitor_find_path(self->path_monitor, up->ifname);
+            gboolean eligible = TRUE;
+            gdouble rtt = 10.0;
+            guint loss = 0;
+            if (p != NULL) {
+                eligible = p->is_eligible;
+                rtt = p->rtt_ms;
+                loss = p->packet_loss_percent;
+                multiwifi_path_info_free(p);
+            }
+            multiwifi_scheduler_add_or_update(self->scheduler, up->ifname, up->ifname,
+                                              up->fwmark, 100, eligible, rtt, loss);
+        }
+
+        GArray *marks = NULL;
+        guint n_marks = multiwifi_scheduler_get_distribution(self->scheduler, &marks);
+        if (n_marks == 0 || marks == NULL) {
+            multiwifi_routing_manager_teardown(self->routing_mgr, op_id, self->op_manager, NULL);
+            multiwifi_route_plan_free(plan);
+            if (marks != NULL) {
+                g_array_unref(marks);
+            }
+            multiwifi_op_manager_finish(self->op_manager, op_id, FALSE, NULL,
+                                        "No eligible uplinks available for load balancing");
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NETWORK_FAILURE,
+                "No eligible uplinks available for load balancing"
+            );
+            g_free(op_id);
+            return;
+        }
+
+        GError *fw_err = NULL;
+        if (!multiwifi_firewall_apply(self->firewall, marks, &fw_err)) {
+            g_array_unref(marks);
+            multiwifi_routing_manager_teardown(self->routing_mgr, op_id, self->op_manager, NULL);
+            multiwifi_route_plan_free(plan);
+            multiwifi_op_manager_finish(self->op_manager, op_id, FALSE, NULL,
+                                        fw_err ? fw_err->message : "Failed to apply firewall rules");
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NETWORK_FAILURE,
+                fw_err ? fw_err->message : "Failed to apply firewall rules"
+            );
+            g_clear_error(&fw_err);
+            g_free(op_id);
+            return;
+        }
+
+        g_array_unref(marks);
         multiwifi_route_plan_free(plan);
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", op_id));
         g_free(op_id);
@@ -332,6 +393,12 @@ static void handle_method_call(GDBusConnection *connection,
         }
 
         gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StopLoadBalancing");
+        GError *fw_err = NULL;
+        multiwifi_firewall_teardown(self->firewall, &fw_err);
+        g_clear_error(&fw_err);
+
+        multiwifi_scheduler_reset(self->scheduler);
+
         GError *stop_err = NULL;
         if (!multiwifi_routing_manager_teardown(self->routing_mgr, op_id, self->op_manager, &stop_err)) {
             g_dbus_method_invocation_return_dbus_error(
@@ -398,6 +465,21 @@ static void handle_method_call(GDBusConnection *connection,
                 "Invalid parameters: weight must be between 1 and 1000 and device_id must be non-empty"
             );
             return;
+        }
+
+        multiwifi_scheduler_set_weight(self->scheduler, dev_id, weight);
+        if (multiwifi_firewall_is_active(self->firewall) &&
+            multiwifi_routing_manager_is_active(self->routing_mgr)) {
+            GArray *marks = NULL;
+            guint n_marks = multiwifi_scheduler_get_distribution(self->scheduler, &marks);
+            if (n_marks > 0 && marks != NULL) {
+                GError *fw_err = NULL;
+                multiwifi_firewall_apply(self->firewall, marks, &fw_err);
+                g_clear_error(&fw_err);
+            }
+            if (marks != NULL) {
+                g_array_unref(marks);
+            }
         }
 
         g_info("SetPathWeight: device '%s' weight set to %u", dev_id, weight);
@@ -526,7 +608,30 @@ static void on_paths_forward(MultiWifiPathMonitor *mon, gpointer user_data)
                     g_variant_new("(@a{sv})", dict),
                     NULL
                 );
+
+                if (multiwifi_firewall_is_active(self->firewall) &&
+                    multiwifi_routing_manager_is_active(self->routing_mgr)) {
+                    multiwifi_scheduler_add_or_update(
+                        self->scheduler, p->ifname, p->ifname, 0, 0,
+                        p->is_eligible, p->rtt_ms, p->packet_loss_percent
+                    );
+                }
             }
+
+            if (multiwifi_firewall_is_active(self->firewall) &&
+                multiwifi_routing_manager_is_active(self->routing_mgr)) {
+                GArray *marks = NULL;
+                guint n_marks = multiwifi_scheduler_get_distribution(self->scheduler, &marks);
+                if (n_marks > 0 && marks != NULL) {
+                    GError *fw_err = NULL;
+                    multiwifi_firewall_apply(self->firewall, marks, &fw_err);
+                    g_clear_error(&fw_err);
+                }
+                if (marks != NULL) {
+                    g_array_unref(marks);
+                }
+            }
+
             g_ptr_array_unref(paths);
         }
     }
@@ -537,6 +642,16 @@ static void multiwifi_daemon_service_dispose(GObject *object)
     MultiWifiDaemonService *self = MULTIWIFI_DAEMON_SERVICE(object);
     multiwifi_daemon_service_stop(self);
 
+    if (self->firewall != NULL) {
+        if (multiwifi_firewall_is_active(self->firewall)) {
+            multiwifi_firewall_teardown(self->firewall, NULL);
+        }
+        g_clear_object(&self->firewall);
+    }
+    if (self->scheduler != NULL) {
+        multiwifi_scheduler_free(self->scheduler);
+        self->scheduler = NULL;
+    }
     if (self->inventory != NULL) {
         g_signal_handlers_disconnect_by_data(self->inventory, self);
         g_clear_object(&self->inventory);
@@ -579,6 +694,15 @@ static void multiwifi_daemon_service_init(MultiWifiDaemonService *self)
     self->op_manager = multiwifi_op_manager_new();
     self->routing_mgr = multiwifi_routing_manager_new(NULL);
     multiwifi_routing_manager_recover(self->routing_mgr, NULL);
+
+    self->scheduler = multiwifi_scheduler_new(MULTIWIFI_STRATEGY_WEIGHTED_ROUND_ROBIN);
+    self->firewall = multiwifi_firewall_new();
+
+    /* Clean recovery of any stale firewall table from past abnormal termination */
+    gboolean fw_exists = FALSE;
+    if (multiwifi_firewall_verify(self->firewall, &fw_exists, NULL) && fw_exists) {
+        multiwifi_firewall_teardown(self->firewall, NULL);
+    }
 
     GError *err = NULL;
     self->node_info = g_dbus_node_info_new_for_xml(s_introspection_xml, &err);

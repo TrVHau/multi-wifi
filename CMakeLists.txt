@@ -27,6 +27,7 @@ pkg_check_modules(GIO_UNIX REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.74)
 pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4>=4.10)
 pkg_check_modules(NM REQUIRED IMPORTED_TARGET libnm>=1.40)
 pkg_check_modules(POLKIT REQUIRED IMPORTED_TARGET polkit-gobject-1)
+pkg_check_modules(NFTABLES REQUIRED IMPORTED_TARGET libnftables)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -44,6 +45,8 @@ add_library(multiwifi-core STATIC
     src/core/journal.c
     src/core/netlink_route.c
     src/core/routing_manager.c
+    src/core/load_balancer.c
+    src/core/firewall.c
     src/daemon/service.c
 )
 target_link_libraries(multiwifi-core PUBLIC
@@ -52,6 +55,7 @@ target_link_libraries(multiwifi-core PUBLIC
     PkgConfig::GIO_UNIX
     PkgConfig::NM
     PkgConfig::POLKIT
+    PkgConfig::NFTABLES
     m
 )
 target_include_directories(multiwifi-core PUBLIC
