@@ -23,7 +23,12 @@ jobs:
             pkg-config \
             libglib2.0-dev \
             libgtk-4-dev \
-            libnm-dev
+            libnm-dev \
+            libpolkit-gobject-1-dev \
+            libnftables-dev \
+            dbus \
+            dbus-daemon \
+            zstd
 
       - name: Configure CMake
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
@@ -33,3 +38,15 @@ jobs:
 
       - name: Run Unit Tests
         run: ctest --test-dir build --output-on-failure --verbose
+
+      - name: Test AddressSanitizer & UndefinedBehaviorSanitizer
+        run: |
+          cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-asan
+          ctest --test-dir build-asan --output-on-failure --verbose
+
+      - name: Test CPack Packaging
+        run: |
+          cd build && cpack
