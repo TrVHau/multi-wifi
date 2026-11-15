@@ -5,6 +5,8 @@
 #include "multiwifi/shared/dbus_defs.h"
 #include "multiwifi/version.h"
 #include <gio/gio.h>
+#include <sys/types.h>
+#include <signal.h>
 
 /* Embedded CSS Theme Fallback */
 static const char CSS_FALLBACK_PART1[] =
@@ -43,6 +45,7 @@ static const char CSS_FALLBACK_PART2[] =
 struct _MultiWifiWindow {
     GtkApplicationWindow parent_instance;
     GtkWidget *daemon_status_lbl;
+    GtkWidget *daemon_toggle_btn;
     GtkWidget *mode_pill;
     GtkWidget *lb_switch;
     GtkWidget *bonding_switch;
@@ -56,6 +59,8 @@ struct _MultiWifiWindow {
     gboolean lb_active;
     gboolean bonding_active;
     gboolean updating_switches;
+    gboolean daemon_action_pending;
+    GPid spawned_daemon_pid;
 };
 
 G_DEFINE_TYPE(MultiWifiWindow, multiwifi_window, GTK_TYPE_APPLICATION_WINDOW)
@@ -81,11 +86,14 @@ static void update_devices_ui(MultiWifiWindow *self);
 static void update_control_buttons_state(MultiWifiWindow *self);
 static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data);
 static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data);
+static void on_daemon_toggle_clicked(GtkButton *btn, gpointer user_data);
 static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data);
 static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data);
 static void on_inventory_devices_changed(MultiWifiInventory *inv, gpointer user_data);
 static void on_paths_changed(MultiWifiPathMonitor *mon, gpointer user_data);
 static void on_status_query_done(GObject *source, GAsyncResult *res, gpointer user_data);
+static void start_daemon_via_pkexec(MultiWifiWindow *self);
+static void stop_daemon_via_pkexec(MultiWifiWindow *self);
 
 static void multiwifi_window_apply_css(void)
 {
@@ -115,6 +123,28 @@ static void multiwifi_window_apply_css(void)
         );
     }
     g_object_unref(provider);
+}
+
+static gchar *find_daemon_executable(void)
+{
+    gchar *path = g_find_program_in_path("multiwifi-daemon");
+    if (path != NULL) {
+        return path;
+    }
+
+    gchar *exe = g_file_read_link("/proc/self/exe", NULL);
+    if (exe != NULL) {
+        gchar *dir = g_path_get_dirname(exe);
+        gchar *candidate = g_build_filename(dir, "multiwifi-daemon", NULL);
+        g_free(dir);
+        g_free(exe);
+        if (g_file_test(candidate, G_FILE_TEST_IS_EXECUTABLE)) {
+            return candidate;
+        }
+        g_free(candidate);
+    }
+
+    return g_strdup("multiwifi-daemon");
 }
 
 static void wifi_select_dialog_free(WifiSelectDialog *dlg)
@@ -167,7 +197,6 @@ static void on_wifi_row_selected(GtkListBox *box, GtkListBoxRow *row, gpointer u
 
 static void populate_wifi_list(WifiSelectDialog *dlg)
 {
-    /* Clear existing list box rows */
     GtkWidget *child = gtk_widget_get_first_child(dlg->list_box);
     while (child != NULL) {
         GtkWidget *next = gtk_widget_get_next_sibling(child);
@@ -200,7 +229,6 @@ static void populate_wifi_list(WifiSelectDialog *dlg)
         gtk_widget_set_margin_start(hbox, 10);
         gtk_widget_set_margin_end(hbox, 10);
 
-        /* Signal bar */
         const gchar *bars = (ap->signal_strength >= 75) ? "▂▄▆█" :
                             (ap->signal_strength >= 50) ? "▂▄▆_" :
                             (ap->signal_strength >= 25) ? "▂▄__" : "▂___";
@@ -214,7 +242,6 @@ static void populate_wifi_list(WifiSelectDialog *dlg)
         gtk_box_append(GTK_BOX(hbox), sig_lbl);
         g_free(sig_markup);
 
-        /* SSID */
         gchar *escaped_ssid = g_markup_escape_text(ap->ssid ? ap->ssid : "Hidden", -1);
         GtkWidget *name_lbl = gtk_label_new(NULL);
         gchar *name_markup = g_strdup_printf("<span weight='bold'>%s</span>", escaped_ssid);
@@ -225,7 +252,6 @@ static void populate_wifi_list(WifiSelectDialog *dlg)
         g_free(name_markup);
         g_free(escaped_ssid);
 
-        /* Badges */
         if (ap->is_active) {
             GtkWidget *act_lbl = gtk_label_new("Connected");
             gtk_widget_add_css_class(act_lbl, "badge");
@@ -583,7 +609,6 @@ static void update_devices_ui(MultiWifiWindow *self)
 
             gtk_box_append(GTK_BOX(ssid_box), top_ssid);
 
-            /* Concise IP string */
             gchar *ip_markup = g_strdup_printf(
                 "<span size='small' color='#6c7086'>IP: <tt>%s</tt></span>",
                 info->ipv4_address ? info->ipv4_address : "Pending"
@@ -602,7 +627,6 @@ static void update_devices_ui(MultiWifiWindow *self)
             gtk_box_append(GTK_BOX(mid_row), idle_lbl);
         }
 
-        /* Action button */
         const gchar *btn_label = (info->state == MULTIWIFI_DEVICE_STATE_CONNECTED) ? "Switch Wi-Fi" : "Connect";
         GtkWidget *wifi_btn = gtk_button_new_with_label(btn_label);
         gtk_widget_add_css_class(wifi_btn, "btn-secondary");
@@ -612,7 +636,7 @@ static void update_devices_ui(MultiWifiWindow *self)
 
         gtk_box_append(GTK_BOX(card_box), mid_row);
 
-        /* Row 3: Minimal Metric Chips (replacing wall of debug text) */
+        /* Row 3: Metric Chips */
         if (path != NULL && path->state != MULTIWIFI_PATH_STATE_OFFLINE) {
             GtkWidget *chips_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
             gtk_widget_set_margin_top(chips_row, 4);
@@ -683,6 +707,22 @@ static void update_control_buttons_state(MultiWifiWindow *self)
     gtk_switch_set_active(GTK_SWITCH(self->bonding_switch), self->bonding_active);
     self->updating_switches = FALSE;
 
+    /* Update Daemon Start / Stop Button */
+    if (self->daemon_toggle_btn != NULL) {
+        gtk_widget_set_sensitive(self->daemon_toggle_btn, !self->daemon_action_pending);
+        if (self->daemon_connected) {
+            gtk_button_set_label(GTK_BUTTON(self->daemon_toggle_btn), "⏹ Stop Daemon");
+            gtk_widget_remove_css_class(self->daemon_toggle_btn, "btn-primary");
+            gtk_widget_add_css_class(self->daemon_toggle_btn, "btn-secondary");
+            gtk_widget_set_tooltip_text(self->daemon_toggle_btn, "Stop the MultiWiFi system service");
+        } else {
+            gtk_button_set_label(GTK_BUTTON(self->daemon_toggle_btn), "🚀 Start Daemon");
+            gtk_widget_remove_css_class(self->daemon_toggle_btn, "btn-secondary");
+            gtk_widget_add_css_class(self->daemon_toggle_btn, "btn-primary");
+            gtk_widget_set_tooltip_text(self->daemon_toggle_btn, "Start MultiWiFi system daemon via Polkit / systemd");
+        }
+    }
+
     if (self->daemon_connected) {
         if (self->daemon_status_lbl != NULL) {
             gtk_widget_remove_css_class(self->daemon_status_lbl, "badge-offline");
@@ -690,7 +730,8 @@ static void update_control_buttons_state(MultiWifiWindow *self)
             gtk_label_set_text(GTK_LABEL(self->daemon_status_lbl), "● Daemon Active");
         }
 
-        gtk_widget_set_visible(self->daemon_banner, FALSE);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#a6e3a1'>✔ Daemon active on System D-Bus</span>");
         gtk_widget_set_sensitive(self->lb_switch, !self->bonding_active);
         gtk_widget_set_sensitive(self->bonding_switch, !self->lb_active);
 
@@ -721,7 +762,6 @@ static void update_control_buttons_state(MultiWifiWindow *self)
 
         gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
             "<span size='small' color='#f38ba8'>⚠ Daemon offline • Routing controls disabled</span>");
-        gtk_widget_set_visible(self->daemon_banner, TRUE);
         gtk_widget_set_sensitive(self->lb_switch, FALSE);
         gtk_widget_set_sensitive(self->bonding_switch, FALSE);
 
@@ -730,6 +770,199 @@ static void update_control_buttons_state(MultiWifiWindow *self)
             gtk_widget_remove_css_class(self->mode_pill, "badge-active");
             gtk_widget_remove_css_class(self->mode_pill, "badge-online");
             gtk_widget_add_css_class(self->mode_pill, "badge-offline");
+        }
+    }
+}
+
+static void stop_daemon_via_pkexec(MultiWifiWindow *self)
+{
+    const gchar *argv[] = { "pkexec", "pkill", "-TERM", "-x", "multiwifi-daemon", NULL };
+    GError *spawn_err = NULL;
+
+    gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+        "<span size='small' color='#89b4fa'>Prompting authorization to stop daemon...</span>");
+
+    gboolean ok = g_spawn_async(
+        NULL,
+        (gchar **)argv,
+        NULL,
+        G_SPAWN_SEARCH_PATH,
+        NULL,
+        NULL,
+        NULL,
+        &spawn_err
+    );
+
+    self->daemon_action_pending = FALSE;
+
+    if (!ok) {
+        gchar *escaped = g_markup_escape_text(spawn_err ? spawn_err->message : "Stop failed", -1);
+        gchar *err_msg = g_strdup_printf(
+            "<span size='small' color='#f38ba8'>Failed to stop daemon: %s</span>", escaped
+        );
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), err_msg);
+        g_free(err_msg);
+        g_free(escaped);
+        g_clear_error(&spawn_err);
+    }
+
+    update_control_buttons_state(self);
+}
+
+static void on_daemon_systemd_stop_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        self->daemon_action_pending = FALSE;
+    } else {
+        if (error != NULL && (strstr(error->message, "NoSuchUnit") != NULL ||
+                              strstr(error->message, "not loaded") != NULL)) {
+            g_clear_error(&error);
+            stop_daemon_via_pkexec(self);
+            return;
+        }
+
+        self->daemon_action_pending = FALSE;
+        g_warning("StopUnit failed: %s", error ? error->message : "Unknown error");
+        g_clear_error(&error);
+    }
+
+    update_control_buttons_state(self);
+}
+
+static void on_daemon_systemd_start_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        self->daemon_action_pending = FALSE;
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#89b4fa'>Authenticating &amp; starting daemon...</span>");
+    } else {
+        if (error != NULL && (strstr(error->message, "NoSuchUnit") != NULL ||
+                              strstr(error->message, "not loaded") != NULL)) {
+            g_clear_error(&error);
+            start_daemon_via_pkexec(self);
+            return;
+        }
+
+        self->daemon_action_pending = FALSE;
+        gchar *escaped = g_markup_escape_text(error ? error->message : "Authentication cancelled", -1);
+        gchar *err_msg = g_strdup_printf(
+            "<span size='small' color='#f38ba8'>Failed to start: %s</span>", escaped
+        );
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), err_msg);
+        g_free(err_msg);
+        g_free(escaped);
+        g_clear_error(&error);
+        update_control_buttons_state(self);
+    }
+}
+
+static void start_daemon_via_pkexec(MultiWifiWindow *self)
+{
+    gchar *daemon_path = find_daemon_executable();
+    const gchar *argv[] = { "pkexec", daemon_path, NULL };
+    GError *spawn_err = NULL;
+
+    gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+        "<span size='small' color='#89b4fa'>Prompting administrator authorization (Polkit)...</span>");
+
+    gboolean ok = g_spawn_async(
+        NULL,
+        (gchar **)argv,
+        NULL,
+        G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD,
+        NULL,
+        NULL,
+        &self->spawned_daemon_pid,
+        &spawn_err
+    );
+    g_free(daemon_path);
+
+    self->daemon_action_pending = FALSE;
+
+    if (!ok) {
+        gchar *escaped = g_markup_escape_text(spawn_err ? spawn_err->message : "Authorization failed", -1);
+        gchar *err_msg = g_strdup_printf(
+            "<span size='small' color='#f38ba8'>Polkit failed: %s</span>", escaped
+        );
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), err_msg);
+        g_free(err_msg);
+        g_free(escaped);
+        g_clear_error(&spawn_err);
+    }
+
+    update_control_buttons_state(self);
+}
+
+static void on_daemon_toggle_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    if (self->daemon_action_pending) {
+        return;
+    }
+
+    if (self->daemon_connected) {
+        self->daemon_action_pending = TRUE;
+        gtk_button_set_label(GTK_BUTTON(self->daemon_toggle_btn), "Stopping...");
+        gtk_widget_set_sensitive(self->daemon_toggle_btn, FALSE);
+
+        if (self->spawned_daemon_pid > 0) {
+            kill(self->spawned_daemon_pid, SIGTERM);
+            g_spawn_close_pid(self->spawned_daemon_pid);
+            self->spawned_daemon_pid = 0;
+        }
+
+        if (self->system_bus != NULL) {
+            g_dbus_connection_call(
+                self->system_bus,
+                "org.freedesktop.systemd1",
+                "/org/freedesktop/systemd1",
+                "org.freedesktop.systemd1.Manager",
+                "StopUnit",
+                g_variant_new("(ss)", "multiwifi-daemon.service", "replace"),
+                G_VARIANT_TYPE("(o)"),
+                G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
+                15000,
+                NULL,
+                on_daemon_systemd_stop_done,
+                self
+            );
+        } else {
+            self->daemon_action_pending = FALSE;
+            update_control_buttons_state(self);
+        }
+    } else {
+        self->daemon_action_pending = TRUE;
+        gtk_button_set_label(GTK_BUTTON(self->daemon_toggle_btn), "Starting...");
+        gtk_widget_set_sensitive(self->daemon_toggle_btn, FALSE);
+
+        if (self->system_bus != NULL) {
+            g_dbus_connection_call(
+                self->system_bus,
+                "org.freedesktop.systemd1",
+                "/org/freedesktop/systemd1",
+                "org.freedesktop.systemd1.Manager",
+                "StartUnit",
+                g_variant_new("(ss)", "multiwifi-daemon.service", "replace"),
+                G_VARIANT_TYPE("(o)"),
+                G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
+                25000,
+                NULL,
+                on_daemon_systemd_start_done,
+                self
+            );
+        } else {
+            start_daemon_via_pkexec(self);
         }
     }
 }
@@ -896,6 +1129,7 @@ static void on_daemon_name_appeared(GDBusConnection *connection,
     (void)name_owner;
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
     self->daemon_connected = TRUE;
+    self->daemon_action_pending = FALSE;
     if (self->system_bus == NULL) {
         self->system_bus = g_object_ref(connection);
     }
@@ -928,6 +1162,7 @@ static void on_daemon_name_vanished(GDBusConnection *connection,
     self->daemon_connected = FALSE;
     self->lb_active = FALSE;
     self->bonding_active = FALSE;
+    self->daemon_action_pending = FALSE;
     update_control_buttons_state(self);
 }
 
@@ -959,6 +1194,12 @@ static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data)
 static void multiwifi_window_dispose(GObject *object)
 {
     MultiWifiWindow *self = MULTIWIFI_WINDOW(object);
+
+    if (self->spawned_daemon_pid > 0) {
+        kill(self->spawned_daemon_pid, SIGTERM);
+        g_spawn_close_pid(self->spawned_daemon_pid);
+        self->spawned_daemon_pid = 0;
+    }
 
     if (self->bus_watcher_id > 0) {
         g_bus_unwatch_name(self->bus_watcher_id);
@@ -1009,10 +1250,18 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     g_signal_connect(diag_btn, "clicked", G_CALLBACK(on_diagnostics_clicked), self);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), diag_btn);
 
-    /* Watch system bus for daemon */
-    self->system_bus = NULL;
+    /* Initialize System Bus Connection early for StartUnit/StopUnit */
+    GError *bus_err = NULL;
+    self->system_bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &bus_err);
+    if (self->system_bus == NULL) {
+        g_clear_error(&bus_err);
+    }
+
     self->daemon_connected = FALSE;
     self->updating_switches = FALSE;
+    self->daemon_action_pending = FALSE;
+    self->spawned_daemon_pid = 0;
+
     self->bus_watcher_id = g_bus_watch_name(
         G_BUS_TYPE_SYSTEM,
         MULTIWIFI_DBUS_NAME,
@@ -1035,7 +1284,7 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), main_box);
     gtk_window_set_child(GTK_WINDOW(self), scrolled);
 
-    /* 1. Multi-Path Controller Hero Card with Switches */
+    /* 1. Multi-Path Controller Hero Card with Switches & Daemon Toggle */
     GtkWidget *hero_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_add_css_class(hero_card, "hero-card");
 
@@ -1067,7 +1316,7 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     g_free(t1_markup);
     gtk_box_append(GTK_BOX(box1), t1);
 
-    GtkWidget *s1 = gtk_label_new("Dynamic flow distribution across all Wi-Fi uplinks");
+    GtkWidget *s1 = gtk_label_new(NULL);
     gtk_widget_set_halign(s1, GTK_ALIGN_START);
     gchar *s1_markup = g_strdup("<span size='small' color='#a6adc8'>Dynamic flow distribution across all Wi-Fi uplinks</span>");
     gtk_label_set_markup(GTK_LABEL(s1), s1_markup);
@@ -1112,11 +1361,21 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     gtk_box_append(GTK_BOX(row2), self->bonding_switch);
     gtk_box_append(GTK_BOX(hero_card), row2);
 
-    /* Minimal Daemon Banner */
+    /* Daemon Status & Start / Stop Toggle Row */
+    GtkWidget *daemon_ctrl_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_set_margin_top(daemon_ctrl_row, 4);
+
     self->daemon_banner = gtk_label_new(NULL);
+    gtk_widget_set_hexpand(self->daemon_banner, TRUE);
     gtk_widget_set_halign(self->daemon_banner, GTK_ALIGN_START);
-    gtk_widget_set_visible(self->daemon_banner, FALSE);
-    gtk_box_append(GTK_BOX(hero_card), self->daemon_banner);
+    gtk_box_append(GTK_BOX(daemon_ctrl_row), self->daemon_banner);
+
+    self->daemon_toggle_btn = gtk_button_new_with_label("🚀 Start Daemon");
+    gtk_widget_add_css_class(self->daemon_toggle_btn, "btn-primary");
+    g_signal_connect(self->daemon_toggle_btn, "clicked", G_CALLBACK(on_daemon_toggle_clicked), self);
+    gtk_box_append(GTK_BOX(daemon_ctrl_row), self->daemon_toggle_btn);
+
+    gtk_box_append(GTK_BOX(hero_card), daemon_ctrl_row);
 
     gtk_box_append(GTK_BOX(main_box), hero_card);
 
