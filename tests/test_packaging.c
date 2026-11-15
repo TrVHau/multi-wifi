@@ -139,6 +139,7 @@ static void test_desktop_file_safety(void)
 
     /* GUI runs unprivileged: must execute multiwifi-gui directly without sudo or pkexec */
     g_assert_nonnull(strstr(desktop, "Exec=multiwifi-gui"));
+    g_assert_nonnull(strstr(desktop, "Icon=io.github.multiwifi.MultiWiFi"));
     g_assert_null(strstr(desktop, "sudo"));
     g_assert_null(strstr(desktop, "pkexec"));
     g_assert_nonnull(strstr(desktop, "Type=Application"));
@@ -264,6 +265,11 @@ static void test_appimage_structure_and_isolation(void)
 
     g_assert_true(g_file_test(apprun_dest, G_FILE_TEST_IS_EXECUTABLE));
     g_assert_true(g_file_test(gui_dest, G_FILE_TEST_IS_EXECUTABLE));
+
+    /* AppImage includes application logo */
+    gchar *icon_dest = g_build_filename(appdir, "io.github.multiwifi.MultiWiFi.png", NULL);
+    g_assert_true(g_file_test(icon_dest, G_FILE_TEST_EXISTS));
+    g_free(icon_dest);
 
     /* AppImage MUST NOT contain the privileged daemon (GUI only) */
     g_assert_false(g_file_test(daemon_dest, G_FILE_TEST_EXISTS));

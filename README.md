@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="data/icons/hicolor/512x512/apps/io.github.multiwifi.MultiWiFi.png" width="140" alt="MultiWiFi Logo" />
+</p>
+
 # MultiWiFi
 
 [![CI](https://github.com/TrVHau/multi-wifi/actions/workflows/ci.yml/badge.svg)](https://github.com/TrVHau/multi-wifi/actions/workflows/ci.yml)

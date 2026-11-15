@@ -19,6 +19,10 @@ chmod 0755 "${APP_DIR}/usr/bin/multiwifi-gui"
 # Copy desktop and app icon
 cp "${ROOT_DIR}/data/io.github.multiwifi.MultiWiFi.desktop" "${APP_DIR}/"
 cp "${ROOT_DIR}/data/io.github.multiwifi.MultiWiFi.desktop" "${APP_DIR}/usr/share/applications/"
+mkdir -p "${APP_DIR}/usr/share/icons"
+cp -r "${ROOT_DIR}/data/icons/"* "${APP_DIR}/usr/share/icons/"
+cp "${ROOT_DIR}/data/icons/hicolor/512x512/apps/io.github.multiwifi.MultiWiFi.png" "${APP_DIR}/"
+cp "${ROOT_DIR}/data/icons/hicolor/512x512/apps/io.github.multiwifi.MultiWiFi.png" "${APP_DIR}/.DirIcon"
 
 # Copy AppRun
 cp "${SCRIPT_DIR}/AppRun" "${APP_DIR}/"

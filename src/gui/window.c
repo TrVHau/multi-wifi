@@ -87,6 +87,7 @@ static void update_control_buttons_state(MultiWifiWindow *self);
 static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data);
 static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data);
 static void on_daemon_toggle_clicked(GtkButton *btn, gpointer user_data);
+static void on_about_clicked(GtkButton *btn, gpointer user_data);
 static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data);
 static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data);
 static void on_inventory_devices_changed(MultiWifiInventory *inv, gpointer user_data);
@@ -123,6 +124,42 @@ static void multiwifi_window_apply_css(void)
         );
     }
     g_object_unref(provider);
+}
+
+static void multiwifi_window_setup_icons(void)
+{
+    static gboolean initialized = FALSE;
+    if (initialized) {
+        return;
+    }
+    initialized = TRUE;
+
+    GdkDisplay *display = gdk_display_get_default();
+    if (display == NULL) {
+        return;
+    }
+
+    GtkIconTheme *theme = gtk_icon_theme_get_for_display(display);
+    if (theme == NULL) {
+        return;
+    }
+
+    /* Add relative search path from current working directory */
+    gtk_icon_theme_add_search_path(theme, "data/icons");
+
+    /* Add search paths relative to executable location */
+    gchar *exe = g_file_read_link("/proc/self/exe", NULL);
+    if (exe != NULL) {
+        gchar *bindir = g_path_get_dirname(exe);
+        gchar *sharedir = g_build_filename(bindir, "..", "share", "icons", NULL);
+        gchar *datadir = g_build_filename(bindir, "..", "data", "icons", NULL);
+        gtk_icon_theme_add_search_path(theme, sharedir);
+        gtk_icon_theme_add_search_path(theme, datadir);
+        g_free(datadir);
+        g_free(sharedir);
+        g_free(bindir);
+        g_free(exe);
+    }
 }
 
 static gchar *find_daemon_executable(void)
@@ -1191,6 +1228,27 @@ static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data)
     }
 }
 
+static void on_about_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+
+    GtkWidget *about = gtk_about_dialog_new();
+    gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(about), "MultiWiFi");
+    gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(about), MULTIWIFI_VERSION_STRING);
+    gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(about),
+        "High-performance native Linux multi-path Wi-Fi load balancing and MPTCP bonding");
+    gtk_about_dialog_set_logo_icon_name(GTK_ABOUT_DIALOG(about), "io.github.multiwifi.MultiWiFi");
+    gtk_about_dialog_set_website(GTK_ABOUT_DIALOG(about), "https://github.com/TrVHau/multi-wifi");
+    gtk_about_dialog_set_license_type(GTK_ABOUT_DIALOG(about), GTK_LICENSE_MIT_X11);
+    const char *authors[] = { "MultiWiFi Team", NULL };
+    gtk_about_dialog_set_authors(GTK_ABOUT_DIALOG(about), authors);
+
+    gtk_window_set_transient_for(GTK_WINDOW(about), GTK_WINDOW(self));
+    gtk_window_set_modal(GTK_WINDOW(about), TRUE);
+    gtk_window_present(GTK_WINDOW(about));
+}
+
 static void multiwifi_window_dispose(GObject *object)
 {
     MultiWifiWindow *self = MULTIWIFI_WINDOW(object);
@@ -1223,9 +1281,11 @@ static void multiwifi_window_dispose(GObject *object)
 
 static void multiwifi_window_init(MultiWifiWindow *self)
 {
+    multiwifi_window_setup_icons();
     multiwifi_window_apply_css();
 
     gtk_window_set_title(GTK_WINDOW(self), "MultiWiFi");
+    gtk_window_set_icon_name(GTK_WINDOW(self), "io.github.multiwifi.MultiWiFi");
     gtk_window_set_default_size(GTK_WINDOW(self), 680, 600);
     gtk_widget_add_css_class(GTK_WIDGET(self), "main-window");
 
@@ -1233,15 +1293,32 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     GtkWidget *header = gtk_header_bar_new();
     gtk_window_set_titlebar(GTK_WINDOW(self), header);
 
+    /* Centered Brand Title with Logo */
+    GtkWidget *title_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_valign(title_box, GTK_ALIGN_CENTER);
+
+    GtkWidget *logo_img = gtk_image_new_from_icon_name("io.github.multiwifi.MultiWiFi");
+    gtk_image_set_pixel_size(GTK_IMAGE(logo_img), 24);
+    gtk_box_append(GTK_BOX(title_box), logo_img);
+
     GtkWidget *title_lbl = gtk_label_new("MultiWiFi");
     gtk_widget_add_css_class(title_lbl, "title");
-    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title_lbl);
+    gtk_box_append(GTK_BOX(title_box), title_lbl);
+
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title_box);
 
     /* Left: Daemon Status Badge */
     self->daemon_status_lbl = gtk_label_new("○ Standalone");
     gtk_widget_add_css_class(self->daemon_status_lbl, "badge");
     gtk_widget_add_css_class(self->daemon_status_lbl, "badge-offline");
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), self->daemon_status_lbl);
+
+    /* Right: About button */
+    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic");
+    gtk_widget_add_css_class(about_btn, "btn-secondary");
+    gtk_widget_set_tooltip_text(about_btn, "About MultiWiFi");
+    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), self);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), about_btn);
 
     /* Right: Refresh button */
     GtkWidget *diag_btn = gtk_button_new_with_label("↻ Probe");
