@@ -1,29 +1,29 @@
 # MultiWiFi
 
 [![CI](https://github.com/TrVHau/multi-wifi/actions/workflows/ci.yml/badge.svg)](https://github.com/TrVHau/multi-wifi/actions/workflows/ci.yml)
-[![C11](https://img.shields.io/badge/C-11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![GTK4](https://img.shields.io/badge/GUI-GTK4%20%7C%20GLib-green.svg)](https://www.gtk.org/)
+[![C11](https://img.shields.io/badge/Language-C11-blue.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
+[![GTK4](https://img.shields.io/badge/GUI-GTK4%20%7C%20Libadwaita%20Style-green.svg)](https://www.gtk.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux-orange.svg)](https://kernel.org/)
-[![Security](https://img.shields.io/badge/Privilege-Polkit%20%2B%20D--Bus-red.svg)](docs/SECURITY.md)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20x86__64-orange.svg)](https://kernel.org/)
+[![Security](https://img.shields.io/badge/Security-Polkit%20%2B%20D--Bus-red.svg)](docs/SECURITY.md)
 
-MultiWiFi is a high-performance, native Linux desktop application and system daemon written in modern C11. It aggregates and balances network traffic across multiple concurrent Wi-Fi connections (such as built-in Wi-Fi plus USB Wi-Fi dongles or tethered mobile 5G hotspots) to enhance network throughput, decrease latency, and provide automatic failover resilience.
+**MultiWiFi** is a high-performance native Linux desktop application and system daemon written in modern C11. It aggregates and balances network traffic across multiple concurrent Wi-Fi connections (such as internal PCIe Wi-Fi, USB Wi-Fi dongles, or tethered mobile 5G hotspots) to maximize internet bandwidth, minimize latency, and provide automatic zero-downtime failover.
 
 ---
 
 ## Table of Contents
 
 - [Key Features](#key-features)
+- [Performance & Benchmarks](#performance--benchmarks)
 - [Operating Modes](#operating-modes)
 - [Architecture & Security](#architecture--security)
 - [System Requirements](#system-requirements)
-- [Installation & Packaging](#installation--packaging)
+- [Installation & Packages](#installation--packages)
 - [Building from Source](#building-from-source)
 - [Quick Start](#quick-start)
-- [D-Bus IPC & Automation](#d-bus-ipc--automation)
+- [D-Bus Automation API](#d-bus-automation-api)
 - [Configuration](#configuration)
-- [Testing & Verification](#testing--verification)
-- [Implementation Roadmap](#implementation-roadmap)
+- [Testing & Quality Assurance](#testing--quality-assurance)
 - [Documentation Index](#documentation-index)
 - [License](#license)
 
@@ -31,14 +31,41 @@ MultiWiFi is a high-performance, native Linux desktop application and system dae
 
 ## Key Features
 
-- **Strict Privilege Separation:** Unprivileged GTK4 GUI runs under standard user accounts. Privileged networking modifications are isolated inside a dedicated system daemon authenticated via Polkit and D-Bus.
-- **Transactional Routing with Atomic Rollback:** Route table and rule alterations are recorded in a persistent journal (`/var/run/multiwifi/*.journal`). If any netlink operation fails, transactions atomically roll back to leave system routes clean.
-- **Zero Global Firewall Flushing:** Declarative `nftables` dataplane operates inside an isolated table (`table ip multiwifi`) without altering or flushing existing firewall chains (UFW, firewalld, Docker, Tailscale).
-- **Dual Operating Modes:**
-  - **Load Balancing:** Per-flow affinity via `nftables` + `conntrack` with dynamic Weighted Round-Robin (WRR) scheduling and automatic health degradation penalties.
-  - **Bonding:** True multi-path internet aggregation via Linux MPTCP (Multipath TCP) and TUN encapsulation to a remote aggregation server.
-- **Dynamic Uplink Quality Monitoring:** Continuous, non-blocking reachability probing with RTT/jitter estimation, rolling packet-loss window, and hysteresis recovery streaks.
-- **Cross-Distribution Packaging:** Official support for Arch Linux (`PKGBUILD`), Debian/Ubuntu (`.deb`), Red Hat/Fedora (`.spec`), and portable standalone GUI AppImages.
+- **Dual Multi-Path Engines:**
+  - **Load Balancing Mode:** Per-flow affinity balancing via declarative `nftables` connection marking and dynamic Weighted Round-Robin (WRR) scheduling. No remote server required.
+  - **MPTCP Tunnel Bonding Mode:** Single-stream packet bonding over Linux Multipath TCP and TUN encapsulation (`mw-tun0`) through an aggregation relay server.
+- **Modern Minimalist Desktop GUI:**
+  - Polished GNOME-style card interface with intuitive toggle switches (`GtkSwitch`), compact status chips, and Wi-Fi network scanner.
+  - Sub-15ms cold start and extremely low memory footprint (~12.5 MB RSS).
+- **Strict Privilege Separation:**
+  - The GTK4 GUI runs 100% unprivileged in user space.
+  - All privileged network operations (routing table modifications, netfilter rules, TUN devices) are isolated in `multiwifi-daemon` authenticated via Polkit (`io.github.multiwifi.modify`) over D-Bus.
+- **Proactive Path Quality Monitoring:**
+  - Continuous, non-blocking health checks measuring real-time RTT, jitter, and rolling packet loss.
+  - Automatic link steering directs latency-sensitive flows to the fastest path and penalizes degraded links.
+- **Transactional Routing with Atomic Rollback:**
+  - All route and rule mutations are tracked in disk-backed journals (`/var/run/multiwifi/*.journal`).
+  - Readback verification ensures atomic rollback if any netlink command fails, preventing orphaned routes.
+- **Non-Destructive Firewall Architecture:**
+  - Operates inside an isolated nftables table (`table ip multiwifi`) without flushing or conflicting with existing firewall tools (UFW, firewalld, Docker, Tailscale).
+- **Cross-Distribution Packaging:**
+  - Official build manifests for Arch Linux (`PKGBUILD`), Debian/Ubuntu (`.deb`), Fedora/RHEL (`.spec`), and portable standalone AppImages.
+
+---
+
+## Performance & Benchmarks
+
+MultiWiFi was benchmarked on bare-metal hardware with dual active Wi-Fi adapters (PCIe Viettel + USB FPT Telecom). Full details and methodology are documented in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+| Metric | Single Wi-Fi | MultiWiFi Dual-Link | Performance Impact |
+| :--- | :--- | :--- | :--- |
+| **Download Throughput** | 39.4 Mbps (1 card) | **47.7 Mbps** (Aggregated) | **+21.0% throughput increase** |
+| **DNS / Gaming Latency** | 29.0 ms (Viettel) | **22.5 ms** (FPT Steering) | **-6.5 ms lower latency (-22.4%)** |
+| **Scheduler Capacity** | N/A | **17.40 Million flows/s** | Capable of multi-gigabit line-rates |
+| **Scheduler Decision Time** | N/A | **57.47 ns / decision** | Imperceptible scheduling latency |
+| **Bonding Parser Speed** | N/A | **1,465 MB/s (~11.72 Gbps)** | Exceeds 10G interface throughput |
+| **D-Bus IPC Roundtrip** | N/A | **437 µs** | Instantaneous GUI responsiveness |
+| **Memory Footprint** | N/A | **~12.0 MB (Daemon) + ~12.5 MB (GUI)** | Minimal system resource usage |
 
 ---
 
@@ -47,7 +74,7 @@ MultiWiFi is a high-performance, native Linux desktop application and system dae
 ```text
                +-------------------------------------------+
                |        Concurrent Wi-Fi Interfaces        |
-               |          [wlan0]         [wlan1]          |
+               |     [wlp0s20f3]         [wlp0s20f0u1]     |
                +-------------------------------------------+
                                      |
                +---------------------+---------------------+
@@ -65,20 +92,20 @@ MultiWiFi is a high-performance, native Linux desktop application and system dae
                |                                           |
                v                                           v
     Multiple Internet Flows                     Single Aggregated Pipe
-    (Downloads, Browsing)                       (Combined Throughput)
+    (Downloads, Browsing, P2P)                  (Combined Single Stream)
 ```
 
 ### 1. Multi-Path Load Balancing
-- Distributes new TCP/UDP flows across active Wi-Fi adapters using Weighted Round-Robin (WRR) with GCD scaling.
-- Preserves flow affinity via connection marks (`ct mark`), preventing TCP session resets and TLS handshake breakages.
-- Dynamically scales path weights according to link latency and rolling loss rates.
-- Automatically restores original default routing when disabled.
+- Distributes new TCP/UDP connections across active Wi-Fi adapters using Weighted Round-Robin (WRR) with GCD scaling.
+- Preserves flow affinity via connection marks (`ct mark`), preventing session resets on HTTPS, banking, and TLS handshakes.
+- Dynamically scales path weights based on real-time link latency and rolling loss rates.
+- Automatically restores original default routing when stopped.
 
 ### 2. MPTCP WAN Bonding
 - Combines physical links into a single virtual tunnel adapter (`mw-tun0`).
 - Encapsulates Layer 3 IP packets inside a lightweight framed streaming protocol over Multipath TCP.
 - Features automatic byte synchronization, magic header validation (`0x4D574246`), and token-based HMAC authentication.
-- Automatically installs dedicated host route bypasses to ensure aggregation tunnel traffic never recursively routes through itself.
+- Automatically installs dedicated host route bypasses to ensure tunnel traffic never recursively routes through itself.
 
 ---
 
@@ -98,175 +125,115 @@ MultiWiFi is a high-performance, native Linux desktop application and system dae
    +-------------------------------|-----------------------------+
    |                               v                             |
    |                     Polkit Authorization                    |
-   |                   (io.github.multiwifi.modify)              |
-   |                                                             |
-   |                 multiwifi-daemon (systemd)                  |
-   |                                                             |
-   |   +-----------------+   +------------------+   +--------+   |
-   |   | Routing Manager |   | Load Balancer    |   | Bonding|   |
-   |   | - Transactional |   | - WRR Engine     |   | Protocol   |
-   |   | - Disk Journal  |   | - Dynamic Health |   | - MPTCP|   |
-   |   | - Atomic Rewind |   | - nftables table |   | - TUN  |   |
-   |   +-----------------+   +------------------+   +--------+   |
-   |                                                             |
+   |                 (io.github.multiwifi.modify)                |
+   |                               |                             |
+   |                               v                             |
    |   +-----------------------------------------------------+   |
-   |   | Hardware Inventory & Path Monitor (libnm, netlink)  |   |
+   |   |                  multiwifi-daemon                   |   |
+   |   |          (Privileged System Service, Root)          |   |
    |   +-----------------------------------------------------+   |
-   +-------------------------------|-----------------------------+
-                                   | rtnetlink / nftables / MPTCP
-                                   v
-   +-------------------------------------------------------------+
-   |                      Linux Kernel                           |
-   |    [rtnetlink]    [conntrack/nft]    [MPTCP]    [TUN driver]|
+   |          |                      |                      |    |
+   |          v                      v                      v    |
+   |   +-------------+       +---------------+       +-------+   |
+   |   |  rtnetlink  |       |   nftables    |       |  TUN  |   |
+   |   | (IP Rules)  |       | (Flow Marks)  |       | (MPTCP)   |
+   |   +-------------+       +---------------+       +-------+   |
    +-------------------------------------------------------------+
 ```
-
-### Security Guarantees
-1. **Zero Shell Interpolation:** Network commands execute directly through native C library APIs (`rtnetlink`, `libnftables`, `libnm`, POSIX socket APIs).
-2. **Crash Reconciliation:** On startup, the daemon scans `/var/run/multiwifi/*.journal` and rewinds any interrupted routing state left by power loss or unclean termination.
-3. **Redaction of Secrets:** Wi-Fi passwords, authentication tokens, and private identifiers are scrubbed before reaching stdout, syslog, or memory logs.
 
 ---
 
 ## System Requirements
 
-- **Linux Kernel:** 5.6 or newer (with `CONFIG_MPTCP=y` and `CONFIG_NETFILTER=y` recommended).
+- **Operating System:** Linux Kernel 5.15+ (Linux 6.x / 7.x recommended for MPTCP).
 - **Core Libraries:**
-  - GLib / GIO 2.74+
-  - GTK4 4.10+
-  - NetworkManager / libnm 1.40+
+  - GLib / GIO / GIO-Unix $\ge$ 2.74
+  - GTK4 $\ge$ 4.10
+  - libnm (NetworkManager) $\ge$ 1.40
   - polkit-gobject-1
-  - libnftables
-- **Hardware:** Two or more functioning Wi-Fi interfaces (e.g., internal PCI Wi-Fi and external USB dongle).
+  - libnftables $\ge$ 1.0.2
+- **Hardware:** At least two network interfaces (e.g., internal Wi-Fi + USB Wi-Fi adapter or USB tethering).
 
 ---
 
-## Installation & Packaging
+## Installation & Packages
 
 ### Arch Linux
-Build and install via `PKGBUILD`:
 ```bash
 cd packaging/arch
 makepkg -si
 ```
 
 ### Debian / Ubuntu
-Build `.deb` package via CPack or CMake:
 ```bash
-cmake -B build -DBUILD_TESTING=OFF
-cmake --build build
-cd build && cpack -G DEB
-sudo dpkg -i multiwifi-*.deb
+dpkg-buildpackage -us -uc -b
+sudo dpkg -i ../multiwifi_*.deb
 ```
 
-### Red Hat / Fedora / openSUSE
-Use the provided RPM spec file:
+### Fedora / RHEL
 ```bash
 rpmbuild -ba packaging/rpm/multiwifi.spec
+sudo dnf install ~/rpmbuild/RPMS/x86_64/multiwifi-*.rpm
 ```
 
-### Portable GUI AppImage
-The portable AppImage bundles the unprivileged GTK4 GUI without requiring root rights:
+### Standalone AppImage
 ```bash
-./packaging/appimage/build-appimage.sh build
-# The resulting AppDir is staged under build/AppDir
+./packaging/appimage/build_appimage.sh
+./build-appimage/MultiWiFi-x86_64.AppImage
 ```
 
 ---
 
 ## Building from Source
 
-### 1. Install Dependencies
-
-**Debian / Ubuntu:**
 ```bash
-sudo apt-get update
-sudo apt-get install -y build-essential cmake ninja-build pkg-config \
-    libglib2.0-dev libgtk-4-dev libnm-dev libpolkit-gobject-1-dev libnftables-dev dbus
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S --needed base-devel cmake ninja pkgconf glib2 gtk4 libnm polkit nftables
-```
-
-**Fedora / RHEL:**
-```bash
-sudo dnf install gcc cmake ninja-build pkgconf-pkg-config \
-    glib2-devel gtk4-devel NetworkManager-libnm-devel polkit-devel libnftables-devel
-```
-
-### 2. Compile and Test
-
-```bash
-# Clone the repository
+# 1. Clone repository
 git clone https://github.com/TrVHau/multi-wifi.git
 cd multi-wifi
 
-# Configure build with testing enabled
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+# 2. Configure with strict warnings (mandated C11)
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 
-# Compile with strict compiler warnings (-Wall -Wextra -Wpedantic)
-cmake --build build
+# 3. Build daemon, GUI, and core libraries
+cmake --build build -j$(nproc)
 
-# Run complete test suite (9 test suites)
-ctest --test-dir build --output-on-failure --verbose
-```
-
-### 3. AddressSanitizer & UndefinedBehaviorSanitizer Build
-```bash
-cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
-    -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
-    -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
-cmake --build build-asan
-ctest --test-dir build-asan --output-on-failure
+# 4. Run automated test suites (100% pass required)
+ctest --test-dir build --output-on-failure
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Start the System Daemon
-Enable and start the systemd service:
+### 1. Enable System Daemon
 ```bash
-sudo systemctl enable --now multiwifi-daemon.service
+# Start and enable the system daemon service
+sudo systemctl enable --now multiwifi-daemon
+
+# Verify daemon status on the system bus
+gdbus introspect --system \
+    --dest io.github.multiwifi.Daemon \
+    --object-path /io/github/multiwifi/Daemon
 ```
 
-*For local development and testing without installing to `/usr`:*
+### 2. Launch Desktop GUI
 ```bash
-# Run on D-Bus session bus with Polkit verification bypassed
-./build/multiwifi-daemon --session --no-polkit
+# Launch the modern GTK4 user interface (runs unprivileged)
+multiwifi-gui
 ```
-
-### 2. Launch the Desktop GUI
-```bash
-./build/multiwifi-gui
-```
-The interface will automatically:
-- Discover all Wi-Fi adapters and active SSIDs.
-- Display latency (RTT), jitter, and packet loss in real time.
-- Provide one-click controls for **Load Balancing** and **Bonding**.
 
 ---
 
-## D-Bus IPC & Automation
+## D-Bus Automation API
 
-MultiWiFi provides a full D-Bus API (`io.github.multiwifi.Daemon`) on the system bus for automation and scripting.
+All daemon operations can be scripted via D-Bus without requiring GUI access:
 
-### Query System Status
+### Query Status
 ```bash
 gdbus call --system \
     --dest io.github.multiwifi.Daemon \
     --object-path /io/github/multiwifi/Daemon \
     --method io.github.multiwifi.Daemon.GetStatus
-```
-
-### Set Custom Path Weight
-```bash
-gdbus call --system \
-    --dest io.github.multiwifi.Daemon \
-    --object-path /io/github/multiwifi/Daemon \
-    --method io.github.multiwifi.Daemon.SetPathWeight "wlan0" 250
 ```
 
 ### Start Load Balancing
@@ -277,7 +244,7 @@ gdbus call --system \
     --method io.github.multiwifi.Daemon.StartLoadBalancing "{}"
 ```
 
-### Stop Load Balancing (Rollback)
+### Stop Load Balancing (Atomic Rollback)
 ```bash
 gdbus call --system \
     --dest io.github.multiwifi.Daemon \
@@ -289,7 +256,7 @@ gdbus call --system \
 
 ## Configuration
 
-Configuration is loaded from `/etc/multiwifi/multiwifi.conf` or user overrides:
+Default settings can be configured in `/etc/multiwifi/multiwifi.conf`:
 
 ```ini
 [general]
@@ -299,14 +266,14 @@ health_check_interval_ms = 3000
 log_level = info
 
 [uplinks]
-preferred_device = wlan0
+preferred_device = wlp0s20f3
 
-[device "wlan0"]
+[device "wlp0s20f3"]
 weight = 100
 probe_target = 1.1.1.1
 
-[device "wlan1"]
-weight = 100
+[device "wlp0s20f0u1"]
+weight = 80
 probe_target = 8.8.8.8
 
 [bonding]
@@ -318,47 +285,32 @@ mtu = 1420
 
 ---
 
-## Testing & Verification
+## Testing & Quality Assurance
 
-MultiWiFi is tested with 9 automated CTest suites covering both happy-path and failure-injection scenarios:
+MultiWiFi includes 9 automated CTest suites covering both happy-path scenarios and failure injection:
 
-| Test Suite | Coverage Area | Verification Techniques |
+| Test Suite | Focus Area | Verification Strategy |
 | :--- | :--- | :--- |
-| `test_config` | Parser & schema safety | Keyfile parsing, range validation, secret rejection in ordinary values |
-| `test_capabilities` | Kernel capability probing | Safe capability checks, secret redaction filter testing |
-| `test_wifi_device` | libnm inventory & mapping | Interface state transitions, device lifecycle management |
-| `test_path_monitor` | Network link quality | Non-blocking probing, RTT/jitter estimation, hysteresis streak recovery |
-| `test_dbus_daemon` | Daemon IPC & Polkit | Lifecycle state machine, D-Bus methods/signals, Polkit access enforcement |
-| `test_routing_manager`| Transactional routing | Isolated Linux network namespaces, journal persistence, atomic rollback |
-| `test_load_balancer` | WRR & nftables | Concurrency safety, GCD normalization, health penalty, netns firewall |
-| `test_bonding` | MPTCP & TUN aggregation | Frame parsing, garbage recovery, handshake, loop-prevention routing |
-| `test_packaging` | Packaging & release safety | FHS permissions, Polkit/systemd safety, AppImage privilege isolation |
+| `test_config` | Parser & schema safety | Keyfile parsing, range validation, secret rejection |
+| `test_capabilities` | Kernel capabilities | Safe probing, secret redaction filters |
+| `test_wifi_device` | libnm inventory & mapping | Interface state transitions, lifecycle management |
+| `test_path_monitor` | Link quality & RTT | Non-blocking probing, jitter estimation, hysteresis |
+| `test_dbus_daemon` | Daemon IPC & Polkit | Lifecycle state machine, Polkit access enforcement |
+| `test_routing_manager`| Transactional routing | Isolated netns, journal persistence, atomic rollback |
+| `test_load_balancer` | WRR & nftables | Concurrency safety, GCD normalization, netns firewall |
+| `test_bonding` | MPTCP & TUN aggregation | Frame parsing, garbage recovery, loop-prevention |
+| `test_packaging` | Distribution safety | FHS permissions, systemd safety, AppImage isolation |
 
-Execute all tests in isolated environments:
+Run all tests:
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
 ---
 
-## Implementation Roadmap
-
-All planned implementation phases are completed and verified:
-
-- [x] **Phase 0: Foundation** — Clean C11/GTK4 build system, logging with secret redaction, kernel capability inspection, config schema/validation, and CI automation.
-- [x] **Phase 1: Wi-Fi Inventory** — Read-only libnm integration; detect and track network adapters, connection states, signal strength, SSID, IPv4/IPv6 addresses, and gateways.
-- [x] **Phase 2: Path Monitor** — Independent uplink probing, unprivileged non-blocking reachability tests, RTT/jitter estimation, rolling loss calculation, hysteresis, and recovery streaks.
-- [x] **Phase 3: System Daemon** — D-Bus service (`io.github.multiwifi.Daemon`), Polkit authorization (`io.github.multiwifi.modify`), operation lifecycle state machine, and systemd service unit.
-- [x] **Phase 4: Routing Transaction Manager** — Plan generation, conflict detection, rtnetlink socket backend, transactional disk journal, readback verification, atomic rollback on failure, and crash-recovery reconciliation in isolated namespaces.
-- [x] **Phase 5: Load Balancing** — Weighted Round-Robin (WRR) flow scheduler with GCD scaling, dynamic health penalties on packet loss/RTT, declarative nftables dataplane (`table ip multiwifi`) with flow affinity, zero host firewall flushing, and dynamic D-Bus weighting.
-- [x] **Phase 6: Bonding** — Remote aggregation protocol (magic header, framing, authentication handshake, streaming parser with resync), TUN device encapsulation, recursive loop prevention with dedicated host routing, MPTCP transport socket with standard TCP fallback, and bidirectional IP forwarding worker.
-- [x] **Phase 7: Packaging & Release** — Native distribution packages for Arch (`PKGBUILD`), Debian (`.deb` with safe `postinst`/`prerm`/`postrm` maintainer scripts), and RPM (`multiwifi.spec` with systemd macros), portable GUI-only AppImage bundle (`AppRun` without privileged escalation), clean lifecycle tests, and security review.
-
----
-
 ## Documentation Index
 
-- [AGENTS.md](AGENTS.md) — Coding standards, rules, and security guidelines.
+- [docs/BENCHMARKS.md](docs/BENCHMARKS.md) — Comprehensive empirical benchmark report & methodology.
 - [docs/NETWORK_DESIGN.md](docs/NETWORK_DESIGN.md) — Dataplane architecture, routing policies, and nftables rules.
 - [docs/SECURITY.md](docs/SECURITY.md) — Threat model, privilege separation, and Polkit authorization.
 - [docs/D-BUS-API.md](docs/D-BUS-API.md) — Complete D-Bus interface and signal specifications.
