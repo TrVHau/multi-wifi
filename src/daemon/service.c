@@ -97,6 +97,7 @@ struct _MultiWifiDaemonService {
     MultiWifiFirewall *firewall;
     MultiWifiBondingClient *bonding_client;
     GDBusNodeInfo *node_info;
+    gint64 last_diagnostics_us;
 };
 
 G_DEFINE_TYPE(MultiWifiDaemonService, multiwifi_daemon_service, G_TYPE_OBJECT)
@@ -615,6 +616,17 @@ static void handle_method_call(GDBusConnection *connection,
         g_info("SetPathWeight: device '%s' weight set to %u", dev_id, weight);
         g_dbus_method_invocation_return_value(invocation, NULL);
     } else if (g_strcmp0(method_name, "RunDiagnostics") == 0) {
+        gint64 now_us = g_get_monotonic_time();
+        if (self->last_diagnostics_us > 0 && (now_us - self->last_diagnostics_us) < 1500000) {
+            /* Debounce/Rate-limit: prevent unprivileged D-Bus socket DoS spamming */
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_BUSY,
+                "Diagnostics probe already in progress or ran recently. Please wait."
+            );
+            return;
+        }
+        self->last_diagnostics_us = now_us;
+
         gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "RunDiagnostics");
         multiwifi_op_manager_update(self->op_manager, op_id, MULTIWIFI_OP_STATE_APPLYING, 50, "Executing probe cycle");
 

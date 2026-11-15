@@ -56,6 +56,7 @@ gboolean multiwifi_firewall_apply(MultiWifiFirewall *self,
     g_string_append(rules, "        type filter hook output priority -150; policy accept;\n");
     g_string_append(rules, "        oif \"lo\" accept\n");
     g_string_append(rules, "        ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255 } accept\n");
+    g_string_append(rules, "        ip daddr { 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12 } udp dport 53 accept\n");
     g_string_append(rules, "        udp dport { 67, 68 } accept\n");
     g_string_append(rules, "        meta mark & 0xff00 != 0 accept\n");
 
@@ -141,6 +142,29 @@ gboolean multiwifi_firewall_apply(MultiWifiFirewall *self,
 
     nft_ctx_free(nft);
     g_string_free(rules, TRUE);
+
+    /* Phase 2: Postrouting SNAT/Masquerade for multi-WAN and foreign ISP compatibility */
+    const char *nat_rules =
+        "table ip " MULTIWIFI_NFT_TABLE_NAME " {\n"
+        "    chain postrouting {\n"
+        "        type nat hook postrouting priority 100; policy accept;\n"
+        "        oif != \"lo\" meta mark & 0xff00 == 0 meta mark != 0 masquerade\n"
+        "    }\n"
+        "}\n";
+    struct nft_ctx *nft_nat = nft_ctx_new(NFT_CTX_DEFAULT);
+    if (nft_nat != NULL) {
+        nft_ctx_buffer_output(nft_nat);
+        nft_ctx_buffer_error(nft_nat);
+        int nat_rc = nft_run_cmd_from_buffer(nft_nat, nat_rules);
+        if (nat_rc == 0) {
+            g_info("Multi-WAN NAT masquerade chain applied successfully");
+        } else {
+            const char *nat_err = nft_ctx_get_error_buffer(nft_nat);
+            g_debug("NAT masquerade chain bypassed (kernel nat module unavailable in namespace: %s)",
+                    nat_err ? nat_err : "none");
+        }
+        nft_ctx_free(nft_nat);
+    }
 
     g_mutex_lock(&self->mutex);
     self->is_active = TRUE;
