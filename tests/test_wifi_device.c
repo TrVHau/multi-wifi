@@ -105,7 +105,52 @@ static void test_inventory_object_lifecycle(void)
     g_assert_cmpuint(devs->len, ==, 0);
     g_ptr_array_unref(devs);
 
+    /* Access point query on non-existent device returns empty array */
+    GPtrArray *aps = multiwifi_inventory_dup_access_points(inv, "nonexistent0");
+    g_assert_nonnull(aps);
+    g_assert_cmpuint(aps->len, ==, 0);
+    g_ptr_array_unref(aps);
+
     g_object_unref(inv);
+}
+
+static void test_access_point_info_lifecycle(void)
+{
+    MultiWifiAccessPointInfo *ap = multiwifi_access_point_info_new();
+    g_assert_nonnull(ap);
+    g_assert_null(ap->ssid);
+    g_assert_null(ap->bssid);
+    g_assert_cmpuint(ap->signal_strength, ==, 0);
+    g_assert_false(ap->is_saved);
+    g_assert_false(ap->is_active);
+
+    ap->ssid = g_strdup("TestAP_5G");
+    ap->bssid = g_strdup("00:11:22:33:44:55");
+    ap->signal_strength = 90;
+    ap->frequency = 5180;
+    ap->is_saved = TRUE;
+    ap->saved_connection_id = g_strdup("TestProfile");
+    ap->security_str = g_strdup("WPA2");
+    ap->is_active = TRUE;
+
+    MultiWifiAccessPointInfo *copy = multiwifi_access_point_info_copy(ap);
+    g_assert_nonnull(copy);
+    g_assert_cmpstr(copy->ssid, ==, "TestAP_5G");
+    g_assert_cmpstr(copy->bssid, ==, "00:11:22:33:44:55");
+    g_assert_cmpuint(copy->signal_strength, ==, 90);
+    g_assert_cmpuint(copy->frequency, ==, 5180);
+    g_assert_true(copy->is_saved);
+    g_assert_cmpstr(copy->saved_connection_id, ==, "TestProfile");
+    g_assert_cmpstr(copy->security_str, ==, "WPA2");
+    g_assert_true(copy->is_active);
+
+    /* Modify original to test deep copy */
+    g_free(ap->ssid);
+    ap->ssid = g_strdup("Different");
+    g_assert_cmpstr(copy->ssid, ==, "TestAP_5G");
+
+    multiwifi_access_point_info_free(copy);
+    multiwifi_access_point_info_free(ap);
 }
 
 int main(int argc, char *argv[])
@@ -115,6 +160,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/wifi/device_info_lifecycle", test_device_info_lifecycle);
     g_test_add_func("/wifi/device_state_mapping", test_device_state_mapping);
     g_test_add_func("/wifi/inventory_lifecycle", test_inventory_object_lifecycle);
+    g_test_add_func("/wifi/access_point_info_lifecycle", test_access_point_info_lifecycle);
 
     return g_test_run();
 }

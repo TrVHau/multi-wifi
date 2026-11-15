@@ -62,6 +62,40 @@ MultiWifiDeviceInfo *multiwifi_device_info_copy(const MultiWifiDeviceInfo *src);
  */
 void multiwifi_device_info_free(MultiWifiDeviceInfo *info);
 
+typedef struct {
+    gchar *ssid;                /* UTF-8 SSID name (owned) */
+    gchar *bssid;               /* BSSID MAC address (owned) */
+    guint8 signal_strength;     /* 0 - 100 percent */
+    guint32 frequency;          /* Frequency in MHz */
+    gboolean is_saved;          /* Whether a connection profile already exists */
+    gchar *saved_connection_id; /* Saved profile name if any (owned) */
+    gchar *security_str;        /* e.g. "WPA2", "WPA3", "WPA/WPA2", "Open" (owned) */
+    gboolean is_active;         /* Currently connected AP for this device */
+} MultiWifiAccessPointInfo;
+
+/**
+ * multiwifi_access_point_info_new:
+ *
+ * Allocates and initializes an empty MultiWifiAccessPointInfo struct.
+ *
+ * Returns: (transfer full): Newly allocated AP info.
+ */
+MultiWifiAccessPointInfo *multiwifi_access_point_info_new(void);
+
+/**
+ * multiwifi_access_point_info_copy:
+ * @src: (transfer none): Source struct to duplicate
+ *
+ * Returns: (transfer full): A deep copy of @src.
+ */
+MultiWifiAccessPointInfo *multiwifi_access_point_info_copy(const MultiWifiAccessPointInfo *src);
+
+/**
+ * multiwifi_access_point_info_free:
+ * @info: (transfer full)(nullable): Struct to free
+ */
+void multiwifi_access_point_info_free(MultiWifiAccessPointInfo *info);
+
 /**
  * multiwifi_device_state_from_nm:
  * @nm_state: NMDeviceState value

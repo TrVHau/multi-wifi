@@ -25,6 +25,376 @@ struct _MultiWifiWindow {
 
 G_DEFINE_TYPE(MultiWifiWindow, multiwifi_window, GTK_TYPE_APPLICATION_WINDOW)
 
+typedef struct {
+    MultiWifiWindow *main_win;
+    GtkWidget *dialog_window;
+    gchar *ifname;
+    GtkWidget *list_box;
+    GtkWidget *status_lbl;
+    GtkWidget *spinner;
+    GtkWidget *password_box;
+    GtkWidget *password_entry;
+    GtkWidget *connect_btn;
+    GtkWidget *scan_btn;
+    gchar *selected_ssid;
+    gboolean selected_is_saved;
+    gboolean selected_is_open;
+    GCancellable *cancellable;
+} WifiSelectDialog;
+
+static void wifi_select_dialog_free(WifiSelectDialog *dlg)
+{
+    if (dlg == NULL) {
+        return;
+    }
+    if (dlg->cancellable != NULL) {
+        g_cancellable_cancel(dlg->cancellable);
+        g_object_unref(dlg->cancellable);
+    }
+    g_free(dlg->ifname);
+    g_free(dlg->selected_ssid);
+    g_free(dlg);
+}
+
+static void on_wifi_row_selected(GtkListBox *box, GtkListBoxRow *row, gpointer user_data)
+{
+    (void)box;
+    WifiSelectDialog *dlg = (WifiSelectDialog *)user_data;
+    if (row == NULL) {
+        gtk_widget_set_sensitive(dlg->connect_btn, FALSE);
+        return;
+    }
+
+    const gchar *ssid = g_object_get_data(G_OBJECT(row), "ssid");
+    gboolean is_saved = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "is_saved"));
+    gboolean is_open = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "is_open"));
+
+    g_free(dlg->selected_ssid);
+    dlg->selected_ssid = g_strdup(ssid);
+    dlg->selected_is_saved = is_saved;
+    dlg->selected_is_open = is_open;
+
+    if (is_saved) {
+        gtk_widget_set_visible(dlg->password_box, FALSE);
+        gtk_button_set_label(GTK_BUTTON(dlg->connect_btn), "Connect (Saved)");
+        gtk_widget_set_sensitive(dlg->connect_btn, TRUE);
+    } else if (is_open) {
+        gtk_widget_set_visible(dlg->password_box, FALSE);
+        gtk_button_set_label(GTK_BUTTON(dlg->connect_btn), "Connect");
+        gtk_widget_set_sensitive(dlg->connect_btn, TRUE);
+    } else {
+        gtk_widget_set_visible(dlg->password_box, TRUE);
+        gtk_button_set_label(GTK_BUTTON(dlg->connect_btn), "Connect");
+        gtk_widget_set_sensitive(dlg->connect_btn, TRUE);
+        gtk_widget_grab_focus(dlg->password_entry);
+    }
+}
+
+static void populate_wifi_list(WifiSelectDialog *dlg)
+{
+    /* Clear existing list box rows */
+    GtkWidget *child = gtk_widget_get_first_child(dlg->list_box);
+    while (child != NULL) {
+        GtkWidget *next = gtk_widget_get_next_sibling(child);
+        gtk_list_box_remove(GTK_LIST_BOX(dlg->list_box), child);
+        child = next;
+    }
+
+    GPtrArray *aps = multiwifi_inventory_dup_access_points(dlg->main_win->inventory, dlg->ifname);
+    if (aps == NULL || aps->len == 0) {
+        GtkWidget *row = gtk_list_box_row_new();
+        GtkWidget *lbl = gtk_label_new("No access points discovered. Click 'Rescan' to scan for networks.");
+        gtk_widget_set_margin_top(lbl, 16);
+        gtk_widget_set_margin_bottom(lbl, 16);
+        gtk_widget_set_margin_start(lbl, 12);
+        gtk_widget_set_margin_end(lbl, 12);
+        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), lbl);
+        gtk_list_box_row_set_selectable(GTK_LIST_BOX_ROW(row), FALSE);
+        gtk_list_box_append(GTK_LIST_BOX(dlg->list_box), row);
+        if (aps != NULL) g_ptr_array_unref(aps);
+        return;
+    }
+
+    for (guint i = 0; i < aps->len; i++) {
+        MultiWifiAccessPointInfo *ap = g_ptr_array_index(aps, i);
+
+        GtkWidget *row = gtk_list_box_row_new();
+        GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+        gtk_widget_set_margin_top(hbox, 8);
+        gtk_widget_set_margin_bottom(hbox, 8);
+        gtk_widget_set_margin_start(hbox, 12);
+        gtk_widget_set_margin_end(hbox, 12);
+
+        /* Signal strength bar indicator */
+        const gchar *bars = (ap->signal_strength >= 75) ? "▂▄▆█" :
+                            (ap->signal_strength >= 50) ? "▂▄▆_" :
+                            (ap->signal_strength >= 25) ? "▂▄__" : "▂___";
+
+        /* SSID and Frequency label */
+        gchar *escaped_ssid = g_markup_escape_text(ap->ssid ? ap->ssid : "Hidden", -1);
+        double freq_ghz = (double)ap->frequency / 1000.0;
+        gchar *name_markup = g_strdup_printf(
+            "<span weight='bold'>%s</span>  <span size='small' color='#888'>%.1f GHz</span>",
+            escaped_ssid, freq_ghz
+        );
+        GtkWidget *name_lbl = gtk_label_new(NULL);
+        gtk_label_set_markup(GTK_LABEL(name_lbl), name_markup);
+        gtk_widget_set_halign(name_lbl, GTK_ALIGN_START);
+        gtk_widget_set_hexpand(name_lbl, TRUE);
+        gtk_box_append(GTK_BOX(hbox), name_lbl);
+        g_free(name_markup);
+        g_free(escaped_ssid);
+
+        /* Badges: Connected, Saved, Security */
+        if (ap->is_active) {
+            GtkWidget *act_lbl = gtk_label_new(NULL);
+            gtk_label_set_markup(GTK_LABEL(act_lbl), "<span foreground='#4caf50' weight='bold' size='small'>● Connected</span>");
+            gtk_box_append(GTK_BOX(hbox), act_lbl);
+        } else if (ap->is_saved) {
+            GtkWidget *sav_lbl = gtk_label_new(NULL);
+            gtk_label_set_markup(GTK_LABEL(sav_lbl), "<span foreground='#2196f3' size='small'>[Saved]</span>");
+            gtk_box_append(GTK_BOX(hbox), sav_lbl);
+        }
+
+        /* Security string */
+        GtkWidget *sec_lbl = gtk_label_new(NULL);
+        gchar *sec_markup = g_strdup_printf("<span size='small' color='#aaa'>%s</span>",
+            ap->security_str ? ap->security_str : "Open");
+        gtk_label_set_markup(GTK_LABEL(sec_lbl), sec_markup);
+        gtk_box_append(GTK_BOX(hbox), sec_lbl);
+        g_free(sec_markup);
+
+        /* Signal percentage */
+        GtkWidget *sig_lbl = gtk_label_new(NULL);
+        gchar *sig_markup = g_strdup_printf("<span font_family='monospace' size='small'>%s %u%%</span>", bars, ap->signal_strength);
+        gtk_label_set_markup(GTK_LABEL(sig_lbl), sig_markup);
+        gtk_box_append(GTK_BOX(hbox), sig_lbl);
+        g_free(sig_markup);
+
+        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), hbox);
+
+        gboolean is_open = (g_strcmp0(ap->security_str, "Open") == 0);
+        g_object_set_data_full(G_OBJECT(row), "ssid", g_strdup(ap->ssid), g_free);
+        g_object_set_data(G_OBJECT(row), "is_saved", GINT_TO_POINTER(ap->is_saved));
+        g_object_set_data(G_OBJECT(row), "is_open", GINT_TO_POINTER(is_open));
+
+        gtk_list_box_append(GTK_LIST_BOX(dlg->list_box), row);
+    }
+
+    g_ptr_array_unref(aps);
+}
+
+static void on_dialog_scan_ready(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    (void)source;
+    WifiSelectDialog *dlg = (WifiSelectDialog *)user_data;
+    GError *error = NULL;
+
+    multiwifi_inventory_request_scan_finish(dlg->main_win->inventory, res, &error);
+    gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
+    gtk_widget_set_sensitive(dlg->scan_btn, TRUE);
+    gtk_widget_set_sensitive(dlg->list_box, TRUE);
+
+    if (error != NULL) {
+        g_clear_error(&error);
+    }
+
+    populate_wifi_list(dlg);
+    gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+        "<span size='small' color='#388e3c'>Scan complete. Select a network to connect.</span>");
+}
+
+static void on_dialog_scan_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    WifiSelectDialog *dlg = (WifiSelectDialog *)user_data;
+    gtk_widget_set_sensitive(dlg->scan_btn, FALSE);
+    gtk_widget_set_sensitive(dlg->connect_btn, FALSE);
+    gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+    gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+        "<span size='small' color='#2196f3'>Scanning for Wi-Fi networks...</span>");
+
+    multiwifi_inventory_request_scan_async(
+        dlg->main_win->inventory,
+        dlg->ifname,
+        dlg->cancellable,
+        on_dialog_scan_ready,
+        dlg
+    );
+}
+
+static void on_dialog_connect_ready(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    (void)source;
+    WifiSelectDialog *dlg = (WifiSelectDialog *)user_data;
+    GError *error = NULL;
+
+    gboolean ok = multiwifi_inventory_connect_wifi_finish(dlg->main_win->inventory, res, &error);
+    gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
+
+    if (ok) {
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+            "<span size='small' color='#388e3c'><b>Connected successfully!</b></span>");
+        gtk_window_destroy(GTK_WINDOW(dlg->dialog_window));
+    } else {
+        gtk_widget_set_sensitive(dlg->connect_btn, TRUE);
+        gtk_widget_set_sensitive(dlg->scan_btn, TRUE);
+        gtk_widget_set_sensitive(dlg->list_box, TRUE);
+
+        gchar *escaped_msg = g_markup_escape_text(error ? error->message : "Unknown error", -1);
+        gchar *err_markup = g_strdup_printf("<span size='small' color='#d32f2f'><b>Connection failed:</b> %s</span>", escaped_msg);
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl), err_markup);
+        g_free(err_markup);
+        g_free(escaped_msg);
+        g_clear_error(&error);
+    }
+}
+
+static void on_dialog_connect_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    WifiSelectDialog *dlg = (WifiSelectDialog *)user_data;
+    if (dlg->selected_ssid == NULL) {
+        return;
+    }
+
+    const gchar *pass = NULL;
+    if (gtk_widget_get_visible(dlg->password_box)) {
+        pass = gtk_editable_get_text(GTK_EDITABLE(dlg->password_entry));
+    }
+
+    gtk_widget_set_sensitive(dlg->connect_btn, FALSE);
+    gtk_widget_set_sensitive(dlg->scan_btn, FALSE);
+    gtk_widget_set_sensitive(dlg->list_box, FALSE);
+    gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+
+    gchar *escaped_ssid = g_markup_escape_text(dlg->selected_ssid, -1);
+    gchar *status_markup = g_strdup_printf(
+        "<span size='small' color='#2196f3'>Connecting %s to '%s'...</span>",
+        dlg->ifname, escaped_ssid
+    );
+    gtk_label_set_markup(GTK_LABEL(dlg->status_lbl), status_markup);
+    g_free(status_markup);
+    g_free(escaped_ssid);
+
+    multiwifi_inventory_connect_wifi_async(
+        dlg->main_win->inventory,
+        dlg->ifname,
+        dlg->selected_ssid,
+        pass,
+        dlg->cancellable,
+        on_dialog_connect_ready,
+        dlg
+    );
+}
+
+static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    const gchar *ifname = g_object_get_data(G_OBJECT(btn), "ifname");
+    if (ifname == NULL || self->inventory == NULL) {
+        return;
+    }
+
+    WifiSelectDialog *dlg = g_new0(WifiSelectDialog, 1);
+    dlg->main_win = self;
+    dlg->ifname = g_strdup(ifname);
+    dlg->cancellable = g_cancellable_new();
+
+    dlg->dialog_window = gtk_window_new();
+    gchar *win_title = g_strdup_printf("Select Wi-Fi Network (%s)", ifname);
+    gtk_window_set_title(GTK_WINDOW(dlg->dialog_window), win_title);
+    g_free(win_title);
+
+    gtk_window_set_default_size(GTK_WINDOW(dlg->dialog_window), 480, 500);
+    gtk_window_set_transient_for(GTK_WINDOW(dlg->dialog_window), GTK_WINDOW(self));
+    gtk_window_set_modal(GTK_WINDOW(dlg->dialog_window), TRUE);
+
+    /* Header Bar */
+    GtkWidget *header = gtk_header_bar_new();
+    gtk_window_set_titlebar(GTK_WINDOW(dlg->dialog_window), header);
+
+    dlg->spinner = gtk_spinner_new();
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), dlg->spinner);
+
+    dlg->scan_btn = gtk_button_new_with_label("Rescan");
+    gtk_widget_set_tooltip_text(dlg->scan_btn, "Scan for nearby Wi-Fi access points");
+    g_signal_connect(dlg->scan_btn, "clicked", G_CALLBACK(on_dialog_scan_clicked), dlg);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), dlg->scan_btn);
+
+    /* Main Container */
+    GtkWidget *content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_top(content_box, 14);
+    gtk_widget_set_margin_bottom(content_box, 14);
+    gtk_widget_set_margin_start(content_box, 16);
+    gtk_widget_set_margin_end(content_box, 16);
+
+    /* Subtitle */
+    gchar *sub_markup = g_strdup_printf(
+        "<span size='small' color='#666'>Select a Wi-Fi network to connect adapter <b>%s</b>:</span>",
+        ifname
+    );
+    GtkWidget *sub_lbl = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(sub_lbl), sub_markup);
+    gtk_widget_set_halign(sub_lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(content_box), sub_lbl);
+    g_free(sub_markup);
+
+    /* List Box in Scrolled Window */
+    GtkWidget *scrolled = gtk_scrolled_window_new();
+    gtk_widget_set_vexpand(scrolled, TRUE);
+    gtk_scrolled_window_set_has_frame(GTK_SCROLLED_WINDOW(scrolled), TRUE);
+
+    dlg->list_box = gtk_list_box_new();
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(dlg->list_box), GTK_SELECTION_SINGLE);
+    g_signal_connect(dlg->list_box, "row-selected", G_CALLBACK(on_wifi_row_selected), dlg);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), dlg->list_box);
+    gtk_box_append(GTK_BOX(content_box), scrolled);
+
+    /* Password Input Box (Hidden initially) */
+    dlg->password_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_visible(dlg->password_box, FALSE);
+
+    GtkWidget *pwd_lbl = gtk_label_new("Password:");
+    gtk_box_append(GTK_BOX(dlg->password_box), pwd_lbl);
+
+    dlg->password_entry = gtk_password_entry_new();
+    gtk_password_entry_set_show_peek_icon(GTK_PASSWORD_ENTRY(dlg->password_entry), TRUE);
+    gtk_widget_set_hexpand(dlg->password_entry, TRUE);
+    gtk_box_append(GTK_BOX(dlg->password_box), dlg->password_entry);
+    gtk_box_append(GTK_BOX(content_box), dlg->password_box);
+
+    /* Status Label */
+    dlg->status_lbl = gtk_label_new(NULL);
+    gtk_label_set_wrap(GTK_LABEL(dlg->status_lbl), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(dlg->status_lbl), 0.0f);
+    gtk_box_append(GTK_BOX(content_box), dlg->status_lbl);
+
+    /* Bottom Button Row */
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_END);
+
+    GtkWidget *cancel_btn = gtk_button_new_with_label("Cancel");
+    g_signal_connect_swapped(cancel_btn, "clicked", G_CALLBACK(gtk_window_destroy), dlg->dialog_window);
+    gtk_box_append(GTK_BOX(btn_row), cancel_btn);
+
+    dlg->connect_btn = gtk_button_new_with_label("Connect");
+    gtk_widget_set_sensitive(dlg->connect_btn, FALSE);
+    g_signal_connect(dlg->connect_btn, "clicked", G_CALLBACK(on_dialog_connect_clicked), dlg);
+    gtk_box_append(GTK_BOX(btn_row), dlg->connect_btn);
+
+    gtk_box_append(GTK_BOX(content_box), btn_row);
+
+    gtk_window_set_child(GTK_WINDOW(dlg->dialog_window), content_box);
+
+    /* Cleanup when window is destroyed */
+    g_signal_connect_swapped(dlg->dialog_window, "destroy", G_CALLBACK(wifi_select_dialog_free), dlg);
+
+    /* Initial populate */
+    populate_wifi_list(dlg);
+    gtk_window_present(GTK_WINDOW(dlg->dialog_window));
+}
+
 static void update_devices_ui(MultiWifiWindow *self)
 {
     if (self->devices_box == NULL || self->inventory == NULL) {
@@ -169,6 +539,19 @@ static void update_devices_ui(MultiWifiWindow *self)
             g_free(escaped_reason);
             gtk_box_append(GTK_BOX(card_box), metrics_lbl);
         }
+
+        /* Action row: Wi-Fi network selection */
+        GtkWidget *action_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_margin_top(action_row, 4);
+
+        const gchar *btn_label = (info->state == MULTIWIFI_DEVICE_STATE_CONNECTED)
+            ? "Switch Wi-Fi Network..." : "Connect to Wi-Fi...";
+        GtkWidget *wifi_btn = gtk_button_new_with_label(btn_label);
+        gtk_widget_set_tooltip_text(wifi_btn, "Scan and select a Wi-Fi network for this adapter");
+        g_object_set_data_full(G_OBJECT(wifi_btn), "ifname", g_strdup(info->ifname), g_free);
+        g_signal_connect(wifi_btn, "clicked", G_CALLBACK(on_select_wifi_clicked), self);
+        gtk_box_append(GTK_BOX(action_row), wifi_btn);
+        gtk_box_append(GTK_BOX(card_box), action_row);
 
         if (path != NULL) {
             multiwifi_path_info_free(path);

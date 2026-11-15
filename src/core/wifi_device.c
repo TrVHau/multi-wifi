@@ -136,3 +136,39 @@ gchar *multiwifi_device_info_to_string(const MultiWifiDeviceInfo *info)
         info->connection_uuid ? info->connection_uuid : "<none>"
     );
 }
+
+MultiWifiAccessPointInfo *multiwifi_access_point_info_new(void)
+{
+    return g_new0(MultiWifiAccessPointInfo, 1);
+}
+
+MultiWifiAccessPointInfo *multiwifi_access_point_info_copy(const MultiWifiAccessPointInfo *src)
+{
+    if (src == NULL) {
+        return NULL;
+    }
+
+    MultiWifiAccessPointInfo *dst = g_new0(MultiWifiAccessPointInfo, 1);
+    dst->ssid = g_strdup(src->ssid);
+    dst->bssid = g_strdup(src->bssid);
+    dst->signal_strength = src->signal_strength;
+    dst->frequency = src->frequency;
+    dst->is_saved = src->is_saved;
+    dst->saved_connection_id = g_strdup(src->saved_connection_id);
+    dst->security_str = g_strdup(src->security_str);
+    dst->is_active = src->is_active;
+    return dst;
+}
+
+void multiwifi_access_point_info_free(MultiWifiAccessPointInfo *info)
+{
+    if (info == NULL) {
+        return;
+    }
+
+    g_free(info->ssid);
+    g_free(info->bssid);
+    g_free(info->saved_connection_id);
+    g_free(info->security_str);
+    g_free(info);
+}

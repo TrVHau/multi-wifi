@@ -369,3 +369,359 @@ MultiWifiDeviceInfo *multiwifi_inventory_find_device(MultiWifiInventory *self, c
 
     return match;
 }
+
+static NMDeviceWifi *find_nm_device_wifi(MultiWifiInventory *self, const gchar *ifname)
+{
+    if (self == NULL || self->client == NULL || ifname == NULL) {
+        return NULL;
+    }
+
+    const GPtrArray *devs = nm_client_get_devices(self->client);
+    if (devs == NULL) {
+        return NULL;
+    }
+
+    for (guint i = 0; i < devs->len; i++) {
+        NMDevice *dev = g_ptr_array_index(devs, i);
+        if (NM_IS_DEVICE_WIFI(dev)) {
+            const char *dev_iface = nm_device_get_iface(dev);
+            if (dev_iface != NULL && g_strcmp0(dev_iface, ifname) == 0) {
+                return NM_DEVICE_WIFI(dev);
+            }
+        }
+    }
+    return NULL;
+}
+
+static gchar *determine_ap_security(NMAccessPoint *ap)
+{
+    NM80211ApFlags flags = nm_access_point_get_flags(ap);
+    NM80211ApSecurityFlags wpa = nm_access_point_get_wpa_flags(ap);
+    NM80211ApSecurityFlags rsn = nm_access_point_get_rsn_flags(ap);
+
+    if (rsn & NM_802_11_AP_SEC_KEY_MGMT_SAE) {
+        return g_strdup("WPA3");
+    }
+    if ((rsn & NM_802_11_AP_SEC_KEY_MGMT_PSK) && (wpa & NM_802_11_AP_SEC_KEY_MGMT_PSK)) {
+        return g_strdup("WPA/WPA2");
+    }
+    if (rsn & NM_802_11_AP_SEC_KEY_MGMT_PSK) {
+        return g_strdup("WPA2");
+    }
+    if (wpa & NM_802_11_AP_SEC_KEY_MGMT_PSK) {
+        return g_strdup("WPA");
+    }
+    if (flags & NM_802_11_AP_FLAGS_PRIVACY) {
+        return g_strdup("WEP");
+    }
+    return g_strdup("Open");
+}
+
+static NMConnection *find_saved_connection_for_ssid(MultiWifiInventory *self, const gchar *target_ssid)
+{
+    if (self == NULL || self->client == NULL || target_ssid == NULL) {
+        return NULL;
+    }
+
+    const GPtrArray *conns = nm_client_get_connections(self->client);
+    if (conns == NULL) {
+        return NULL;
+    }
+
+    for (guint i = 0; i < conns->len; i++) {
+        NMConnection *c = g_ptr_array_index(conns, i);
+        NMSettingWireless *s_w = nm_connection_get_setting_wireless(c);
+        if (s_w != NULL) {
+            GBytes *s_bytes = nm_setting_wireless_get_ssid(s_w);
+            if (s_bytes != NULL) {
+                gsize len = 0;
+                const guint8 *d = g_bytes_get_data(s_bytes, &len);
+                gchar *saved_ssid = nm_utils_ssid_to_utf8(d, len);
+                if (saved_ssid != NULL && g_strcmp0(saved_ssid, target_ssid) == 0) {
+                    g_free(saved_ssid);
+                    return c;
+                }
+                g_free(saved_ssid);
+            }
+        }
+    }
+    return NULL;
+}
+
+static gint compare_ap_strength(gconstpointer a, gconstpointer b)
+{
+    const MultiWifiAccessPointInfo *ap_a = *(const MultiWifiAccessPointInfo **)a;
+    const MultiWifiAccessPointInfo *ap_b = *(const MultiWifiAccessPointInfo **)b;
+
+    /* Active connected AP first */
+    if (ap_a->is_active != ap_b->is_active) {
+        return ap_a->is_active ? -1 : 1;
+    }
+    /* Saved connection second */
+    if (ap_a->is_saved != ap_b->is_saved) {
+        return ap_a->is_saved ? -1 : 1;
+    }
+    /* Higher signal strength first */
+    return (gint)ap_b->signal_strength - (gint)ap_a->signal_strength;
+}
+
+GPtrArray *multiwifi_inventory_dup_access_points(MultiWifiInventory *self, const gchar *ifname)
+{
+    if (self == NULL || ifname == NULL) {
+        return g_ptr_array_new_with_free_func((GDestroyNotify)multiwifi_access_point_info_free);
+    }
+
+    NMDeviceWifi *wifi_dev = find_nm_device_wifi(self, ifname);
+    if (wifi_dev == NULL) {
+        return g_ptr_array_new_with_free_func((GDestroyNotify)multiwifi_access_point_info_free);
+    }
+
+    NMAccessPoint *active_ap = nm_device_wifi_get_active_access_point(wifi_dev);
+    const char *active_bssid = active_ap ? nm_access_point_get_bssid(active_ap) : NULL;
+
+    const GPtrArray *raw_aps = nm_device_wifi_get_access_points(wifi_dev);
+    GPtrArray *result = g_ptr_array_new_with_free_func((GDestroyNotify)multiwifi_access_point_info_free);
+    if (raw_aps == NULL) {
+        return result;
+    }
+
+    GHashTable *seen_ssids = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
+    for (guint i = 0; i < raw_aps->len; i++) {
+        NMAccessPoint *ap = g_ptr_array_index(raw_aps, i);
+        GBytes *ssid_bytes = nm_access_point_get_ssid(ap);
+        if (ssid_bytes == NULL) {
+            continue;
+        }
+
+        gsize len = 0;
+        const guint8 *data = g_bytes_get_data(ssid_bytes, &len);
+        gchar *ssid_utf8 = nm_utils_ssid_to_utf8(data, len);
+        if (ssid_utf8 == NULL || *ssid_utf8 == '\0') {
+            g_free(ssid_utf8);
+            continue;
+        }
+
+        guint8 strength = nm_access_point_get_strength(ap);
+        const char *cur_bssid = nm_access_point_get_bssid(ap);
+        gboolean is_active = (active_bssid != NULL && cur_bssid != NULL && g_strcmp0(active_bssid, cur_bssid) == 0);
+
+        /* Deduplicate by SSID: Keep active or strongest */
+        gpointer existing_idx = g_hash_table_lookup(seen_ssids, ssid_utf8);
+        if (existing_idx != NULL) {
+            guint idx = GPOINTER_TO_UINT(existing_idx) - 1;
+            MultiWifiAccessPointInfo *prev = g_ptr_array_index(result, idx);
+            if (!prev->is_active && (is_active || strength > prev->signal_strength)) {
+                prev->signal_strength = strength;
+                prev->frequency = nm_access_point_get_frequency(ap);
+                g_free(prev->bssid);
+                prev->bssid = g_strdup(cur_bssid);
+                if (is_active) prev->is_active = TRUE;
+            }
+            g_free(ssid_utf8);
+            continue;
+        }
+
+        MultiWifiAccessPointInfo *info = multiwifi_access_point_info_new();
+        info->ssid = g_strdup(ssid_utf8);
+        info->bssid = g_strdup(cur_bssid);
+        info->signal_strength = strength;
+        info->frequency = nm_access_point_get_frequency(ap);
+        info->is_active = is_active;
+        info->security_str = determine_ap_security(ap);
+
+        NMConnection *saved_c = find_saved_connection_for_ssid(self, ssid_utf8);
+        if (saved_c != NULL) {
+            info->is_saved = TRUE;
+            info->saved_connection_id = g_strdup(nm_connection_get_id(saved_c));
+        }
+
+        g_ptr_array_add(result, info);
+        g_hash_table_insert(seen_ssids, ssid_utf8, GUINT_TO_POINTER(result->len));
+    }
+
+    g_hash_table_destroy(seen_ssids);
+    g_ptr_array_sort(result, compare_ap_strength);
+    return result;
+}
+
+static void on_scan_async_ready(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    GTask *task = G_TASK(user_data);
+    GError *error = NULL;
+
+    gboolean success = nm_device_wifi_request_scan_finish(NM_DEVICE_WIFI(source), res, &error);
+    if (!success && error != NULL) {
+        g_task_return_error(task, error);
+    } else {
+        g_task_return_boolean(task, TRUE);
+    }
+    g_object_unref(task);
+}
+
+void multiwifi_inventory_request_scan_async(MultiWifiInventory *self,
+                                            const gchar *ifname,
+                                            GCancellable *cancellable,
+                                            GAsyncReadyCallback callback,
+                                            gpointer user_data)
+{
+    GTask *task = g_task_new(self, cancellable, callback, user_data);
+
+    NMDeviceWifi *wifi_dev = find_nm_device_wifi(self, ifname);
+    if (wifi_dev == NULL) {
+        g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                                "Wi-Fi device '%s' not found", ifname ? ifname : "unknown");
+        g_object_unref(task);
+        return;
+    }
+
+    nm_device_wifi_request_scan_async(wifi_dev, cancellable, on_scan_async_ready, task);
+}
+
+gboolean multiwifi_inventory_request_scan_finish(MultiWifiInventory *self,
+                                                 GAsyncResult *res,
+                                                 GError **error)
+{
+    (void)self;
+    g_return_val_if_fail(g_task_is_valid(res, self), FALSE);
+    return g_task_propagate_boolean(G_TASK(res), error);
+}
+
+static void on_activate_conn_ready(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    GTask *task = G_TASK(user_data);
+    GError *error = NULL;
+
+    NMActiveConnection *act = nm_client_activate_connection_finish(NM_CLIENT(source), res, &error);
+    if (act == NULL) {
+        g_task_return_error(task, error);
+    } else {
+        g_task_return_boolean(task, TRUE);
+    }
+    g_object_unref(task);
+}
+
+static void on_add_activate_conn_ready(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    GTask *task = G_TASK(user_data);
+    GError *error = NULL;
+
+    NMActiveConnection *act = nm_client_add_and_activate_connection_finish(NM_CLIENT(source), res, &error);
+    if (act == NULL) {
+        g_task_return_error(task, error);
+    } else {
+        g_task_return_boolean(task, TRUE);
+    }
+    g_object_unref(task);
+}
+
+void multiwifi_inventory_connect_wifi_async(MultiWifiInventory *self,
+                                            const gchar *ifname,
+                                            const gchar *ssid,
+                                            const gchar *password,
+                                            GCancellable *cancellable,
+                                            GAsyncReadyCallback callback,
+                                            gpointer user_data)
+{
+    GTask *task = g_task_new(self, cancellable, callback, user_data);
+
+    NMDeviceWifi *wifi_dev = find_nm_device_wifi(self, ifname);
+    if (wifi_dev == NULL) {
+        g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                                "Wi-Fi device '%s' not found", ifname ? ifname : "unknown");
+        g_object_unref(task);
+        return;
+    }
+
+    NMConnection *saved = find_saved_connection_for_ssid(self, ssid);
+    if (saved != NULL) {
+        NMSettingConnection *s_con = nm_connection_get_setting_connection(saved);
+        const char *bound_iface = s_con ? nm_setting_connection_get_interface_name(s_con) : NULL;
+
+        if (bound_iface == NULL || g_strcmp0(bound_iface, ifname) == 0) {
+            /* Connection profile is compatible with this adapter */
+            nm_client_activate_connection_async(
+                self->client,
+                saved,
+                NM_DEVICE(wifi_dev),
+                NULL,
+                cancellable,
+                on_activate_conn_ready,
+                task
+            );
+            return;
+        }
+
+        /* Profile is bound to another adapter: clone connection targeting ifname */
+        NMConnection *cloned = nm_simple_connection_new_clone(saved);
+        NMSettingConnection *s_c = nm_connection_get_setting_connection(cloned);
+        gchar *new_id = g_strdup_printf("%s-%s", ssid, ifname);
+        g_object_set(s_c,
+            NM_SETTING_CONNECTION_INTERFACE_NAME, ifname,
+            NM_SETTING_CONNECTION_ID, new_id,
+            NULL);
+        g_free(new_id);
+
+        nm_client_add_and_activate_connection_async(
+            self->client,
+            cloned,
+            NM_DEVICE(wifi_dev),
+            NULL,
+            cancellable,
+            on_add_activate_conn_ready,
+            task
+        );
+        g_object_unref(cloned);
+        return;
+    }
+
+    /* Create new connection profile */
+    NMConnection *conn = nm_simple_connection_new();
+    NMSettingConnection *s_con = (NMSettingConnection *)nm_setting_connection_new();
+    gchar *new_id = g_strdup_printf("%s-%s", ssid, ifname);
+    g_object_set(s_con,
+        NM_SETTING_CONNECTION_ID, new_id,
+        NM_SETTING_CONNECTION_TYPE, NM_SETTING_WIRELESS_SETTING_NAME,
+        NM_SETTING_CONNECTION_INTERFACE_NAME, ifname,
+        NULL);
+    g_free(new_id);
+    nm_connection_add_setting(conn, NM_SETTING(s_con));
+
+    NMSettingWireless *s_w = (NMSettingWireless *)nm_setting_wireless_new();
+    GBytes *ssid_bytes = g_bytes_new(ssid, strlen(ssid));
+    g_object_set(s_w,
+        NM_SETTING_WIRELESS_SSID, ssid_bytes,
+        NM_SETTING_WIRELESS_MODE, "infrastructure",
+        NULL);
+    g_bytes_unref(ssid_bytes);
+    nm_connection_add_setting(conn, NM_SETTING(s_w));
+
+    if (password != NULL && *password != '\0') {
+        NMSettingWirelessSecurity *s_sec = (NMSettingWirelessSecurity *)nm_setting_wireless_security_new();
+        g_object_set(s_sec,
+            NM_SETTING_WIRELESS_SECURITY_KEY_MGMT, "wpa-psk",
+            NM_SETTING_WIRELESS_SECURITY_PSK, password,
+            NULL);
+        nm_connection_add_setting(conn, NM_SETTING(s_sec));
+    }
+
+    nm_client_add_and_activate_connection_async(
+        self->client,
+        conn,
+        NM_DEVICE(wifi_dev),
+        NULL,
+        cancellable,
+        on_add_activate_conn_ready,
+        task
+    );
+    g_object_unref(conn);
+}
+
+gboolean multiwifi_inventory_connect_wifi_finish(MultiWifiInventory *self,
+                                                 GAsyncResult *res,
+                                                 GError **error)
+{
+    (void)self;
+    g_return_val_if_fail(g_task_is_valid(res, self), FALSE);
+    return g_task_propagate_boolean(G_TASK(res), error);
+}
