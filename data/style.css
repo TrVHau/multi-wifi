@@ -21,17 +21,12 @@ headerbar .title {
   color: #cdd6f4;
 }
 
-headerbar .subtitle {
-  font-size: 11px;
-  color: #89b4fa;
-}
-
 /* Cards & Surfaces */
 .modern-card {
   background-color: #1e1e2e;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
-  padding: 16px 20px;
+  padding: 16px 18px;
   margin-bottom: 4px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
 }
@@ -40,7 +35,7 @@ headerbar .subtitle {
   background: linear-gradient(145deg, #1e1e2e 0%, #26273b 100%);
   border: 1px solid rgba(137, 180, 250, 0.22);
   border-radius: 14px;
-  padding: 18px 20px;
+  padding: 16px 18px;
   margin-bottom: 4px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
 }
@@ -49,14 +44,21 @@ headerbar .subtitle {
   background-color: #1a1b26;
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 12px;
-  padding: 14px 18px;
+  padding: 12px 16px;
 }
 
-.metrics-card {
-  background-color: rgba(17, 17, 27, 0.6);
+/* Action Rows (GNOME Settings style) */
+.action-row {
+  background-color: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
   padding: 10px 14px;
+  margin-bottom: 4px;
+}
+
+.action-row:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 /* Section Typography */
@@ -68,10 +70,10 @@ headerbar .subtitle {
   text-transform: uppercase;
 }
 
-/* Status Badges */
+/* Status Badges & Chips */
 .badge {
   border-radius: 9999px;
-  padding: 3px 12px;
+  padding: 3px 10px;
   font-size: 11px;
   font-weight: 700;
 }
@@ -118,14 +120,25 @@ headerbar .subtitle {
   border: 1px solid rgba(203, 166, 247, 0.35);
 }
 
+/* Metric Chips */
+.metric-chip {
+  background-color: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cdd6f4;
+}
+
 /* Modern Buttons */
 button.btn-primary {
   background: linear-gradient(135deg, #89b4fa 0%, #3584e4 100%);
   color: #11111b;
   font-weight: 700;
-  border-radius: 9px;
+  border-radius: 8px;
   border: none;
-  padding: 8px 18px;
+  padding: 6px 14px;
 }
 button.btn-primary:hover {
   background: linear-gradient(135deg, #b4befe 0%, #4a90e2 100%);
@@ -134,26 +147,14 @@ button.btn-primary:hover {
 button.btn-secondary {
   background-color: rgba(255, 255, 255, 0.06);
   color: #cdd6f4;
-  border-radius: 9px;
+  border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   font-weight: 600;
-  padding: 8px 16px;
+  padding: 6px 14px;
 }
 button.btn-secondary:hover {
   background-color: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.25);
-}
-
-button.btn-stop {
-  background-color: rgba(243, 139, 168, 0.15);
-  color: #f38ba8;
-  border-radius: 9px;
-  border: 1px solid rgba(243, 139, 168, 0.35);
-  font-weight: 600;
-  padding: 8px 16px;
-}
-button.btn-stop:hover {
-  background-color: rgba(243, 139, 168, 0.25);
 }
 
 /* Lists and Input Entries */
@@ -165,7 +166,7 @@ listview, list {
 row {
   padding: 8px 12px;
   border-radius: 8px;
-  margin: 3px 6px;
+  margin: 2px 4px;
 }
 row:selected {
   background-color: rgba(137, 180, 250, 0.25);
@@ -179,11 +180,20 @@ entry, passwordentry {
   background-color: #181825;
   color: #cdd6f4;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 9px;
-  padding: 8px 14px;
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 entry:focus, passwordentry:focus {
   border-color: #89b4fa;
+}
+
+/* Switches */
+switch {
+  border-radius: 14px;
+  padding: 2px;
+}
+switch:checked {
+  background-color: #89b4fa;
 }
 
 /* Scrollbar */

@@ -6,20 +6,19 @@
 #include "multiwifi/version.h"
 #include <gio/gio.h>
 
-/* Embedded CSS Theme Fallback (split into chunks to avoid ISO C overlength warnings) */
+/* Embedded CSS Theme Fallback */
 static const char CSS_FALLBACK_PART1[] =
 "window, .main-window { background-color: #16171f; color: #cdd6f4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, sans-serif; }\n"
 "headerbar { background-color: #1e1e2e; border-bottom: 1px solid rgba(255, 255, 255, 0.08); color: #cdd6f4; padding: 6px 12px; }\n"
 "headerbar .title { font-weight: 700; font-size: 14px; color: #cdd6f4; }\n"
-"headerbar .subtitle { font-size: 11px; color: #89b4fa; }\n"
-".modern-card { background-color: #1e1e2e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 16px 20px; margin-bottom: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22); }\n"
-".hero-card { background: linear-gradient(145deg, #1e1e2e 0%, #26273b 100%); border: 1px solid rgba(137, 180, 250, 0.22); border-radius: 14px; padding: 18px 20px; margin-bottom: 4px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28); }\n"
-".subtle-card { background-color: #1a1b26; border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px; padding: 14px 18px; }\n"
-".metrics-card { background-color: rgba(17, 17, 27, 0.6); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 10px; padding: 10px 14px; }\n"
+".modern-card { background-color: #1e1e2e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 16px 18px; margin-bottom: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22); }\n"
+".hero-card { background: linear-gradient(145deg, #1e1e2e 0%, #26273b 100%); border: 1px solid rgba(137, 180, 250, 0.22); border-radius: 14px; padding: 16px 18px; margin-bottom: 4px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28); }\n"
+".action-row { background-color: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 10px; padding: 10px 14px; margin-bottom: 4px; }\n"
+".action-row:hover { background-color: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.12); }\n"
 ".section-header { font-size: 11px; font-weight: 800; letter-spacing: 1.2px; color: #89b4fa; text-transform: uppercase; }\n";
 
 static const char CSS_FALLBACK_PART2[] =
-".badge { border-radius: 9999px; padding: 3px 12px; font-size: 11px; font-weight: 700; }\n"
+".badge { border-radius: 9999px; padding: 3px 10px; font-size: 11px; font-weight: 700; }\n"
 ".badge-online { background-color: rgba(166, 227, 161, 0.16); color: #a6e3a1; border: 1px solid rgba(166, 227, 161, 0.35); }\n"
 ".badge-degraded { background-color: rgba(249, 226, 175, 0.16); color: #f9e2af; border: 1px solid rgba(249, 226, 175, 0.35); }\n"
 ".badge-danger { background-color: rgba(243, 139, 168, 0.16); color: #f38ba8; border: 1px solid rgba(243, 139, 168, 0.35); }\n"
@@ -27,30 +26,28 @@ static const char CSS_FALLBACK_PART2[] =
 ".badge-offline { background-color: rgba(108, 112, 134, 0.16); color: #a6adc8; border: 1px solid rgba(108, 112, 134, 0.28); }\n"
 ".badge-hw { background-color: rgba(148, 226, 213, 0.14); color: #94e2d5; border: 1px solid rgba(148, 226, 213, 0.32); }\n"
 ".badge-saved { background-color: rgba(203, 166, 247, 0.16); color: #cba6f7; border: 1px solid rgba(203, 166, 247, 0.35); }\n"
-"button.btn-primary { background: linear-gradient(135deg, #89b4fa 0%, #3584e4 100%); color: #11111b; font-weight: 700; border-radius: 9px; border: none; padding: 8px 18px; }\n"
+".metric-chip { background-color: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 4px 10px; font-size: 11px; font-weight: 600; color: #cdd6f4; }\n"
+"button.btn-primary { background: linear-gradient(135deg, #89b4fa 0%, #3584e4 100%); color: #11111b; font-weight: 700; border-radius: 8px; border: none; padding: 6px 14px; }\n"
 "button.btn-primary:hover { background: linear-gradient(135deg, #b4befe 0%, #4a90e2 100%); }\n"
-"button.btn-secondary { background-color: rgba(255, 255, 255, 0.06); color: #cdd6f4; border-radius: 9px; border: 1px solid rgba(255, 255, 255, 0.12); font-weight: 600; padding: 8px 16px; }\n"
+"button.btn-secondary { background-color: rgba(255, 255, 255, 0.06); color: #cdd6f4; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.12); font-weight: 600; padding: 6px 14px; }\n"
 "button.btn-secondary:hover { background-color: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.25); }\n"
-"button.btn-stop { background-color: rgba(243, 139, 168, 0.15); color: #f38ba8; border-radius: 9px; border: 1px solid rgba(243, 139, 168, 0.35); font-weight: 600; padding: 8px 16px; }\n"
-"button.btn-stop:hover { background-color: rgba(243, 139, 168, 0.25); }\n"
 "listview, list { background-color: #181825; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.08); }\n"
-"row { padding: 8px 12px; border-radius: 8px; margin: 3px 6px; }\n"
+"row { padding: 8px 12px; border-radius: 8px; margin: 2px 4px; }\n"
 "row:selected { background-color: rgba(137, 180, 250, 0.25); color: #ffffff; }\n"
 "row:hover:not(:selected) { background-color: rgba(255, 255, 255, 0.05); }\n"
-"entry, passwordentry { background-color: #181825; color: #cdd6f4; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 9px; padding: 8px 14px; }\n"
-"entry:focus, passwordentry:focus { border-color: #89b4fa; }\n";
+"entry, passwordentry { background-color: #181825; color: #cdd6f4; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; padding: 8px 12px; }\n"
+"entry:focus, passwordentry:focus { border-color: #89b4fa; }\n"
+"switch { border-radius: 14px; padding: 2px; }\n"
+"switch:checked { background-color: #89b4fa; }\n";
 
 struct _MultiWifiWindow {
     GtkApplicationWindow parent_instance;
-    GtkWidget *caps_label;
     GtkWidget *daemon_status_lbl;
-    GtkWidget *daemon_banner;
-    GtkWidget *lb_btn;
-    GtkWidget *bonding_btn;
-    GtkWidget *devices_box;
     GtkWidget *mode_pill;
-    GtkWidget *mode_title_lbl;
-    GtkWidget *mode_desc_lbl;
+    GtkWidget *lb_switch;
+    GtkWidget *bonding_switch;
+    GtkWidget *daemon_banner;
+    GtkWidget *devices_box;
     MultiWifiInventory *inventory;
     MultiWifiPathMonitor *path_monitor;
     guint bus_watcher_id;
@@ -58,6 +55,7 @@ struct _MultiWifiWindow {
     gboolean daemon_connected;
     gboolean lb_active;
     gboolean bonding_active;
+    gboolean updating_switches;
 };
 
 G_DEFINE_TYPE(MultiWifiWindow, multiwifi_window, GTK_TYPE_APPLICATION_WINDOW)
@@ -81,8 +79,8 @@ typedef struct {
 
 static void update_devices_ui(MultiWifiWindow *self);
 static void update_control_buttons_state(MultiWifiWindow *self);
-static void on_lb_clicked(GtkButton *btn, gpointer user_data);
-static void on_bonding_clicked(GtkButton *btn, gpointer user_data);
+static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data);
+static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data);
 static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data);
 static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data);
 static void on_inventory_devices_changed(MultiWifiInventory *inv, gpointer user_data);
@@ -153,7 +151,7 @@ static void on_wifi_row_selected(GtkListBox *box, GtkListBoxRow *row, gpointer u
 
     if (is_saved) {
         gtk_widget_set_visible(dlg->password_box, FALSE);
-        gtk_button_set_label(GTK_BUTTON(dlg->connect_btn), "Connect (Saved)");
+        gtk_button_set_label(GTK_BUTTON(dlg->connect_btn), "Connect");
         gtk_widget_set_sensitive(dlg->connect_btn, TRUE);
     } else if (is_open) {
         gtk_widget_set_visible(dlg->password_box, FALSE);
@@ -180,11 +178,9 @@ static void populate_wifi_list(WifiSelectDialog *dlg)
     GPtrArray *aps = multiwifi_inventory_dup_access_points(dlg->main_win->inventory, dlg->ifname);
     if (aps == NULL || aps->len == 0) {
         GtkWidget *row = gtk_list_box_row_new();
-        GtkWidget *lbl = gtk_label_new("No access points discovered. Click 'Rescan' to scan for nearby networks.");
-        gtk_widget_set_margin_top(lbl, 18);
-        gtk_widget_set_margin_bottom(lbl, 18);
-        gtk_widget_set_margin_start(lbl, 14);
-        gtk_widget_set_margin_end(lbl, 14);
+        GtkWidget *lbl = gtk_label_new("No Wi-Fi networks found. Click 'Rescan'.");
+        gtk_widget_set_margin_top(lbl, 16);
+        gtk_widget_set_margin_bottom(lbl, 16);
         gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), lbl);
         gtk_list_box_row_set_selectable(GTK_LIST_BOX_ROW(row), FALSE);
         gtk_list_box_append(GTK_LIST_BOX(dlg->list_box), row);
@@ -198,36 +194,30 @@ static void populate_wifi_list(WifiSelectDialog *dlg)
         MultiWifiAccessPointInfo *ap = g_ptr_array_index(aps, i);
 
         GtkWidget *row = gtk_list_box_row_new();
-        GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-        gtk_widget_set_margin_top(hbox, 8);
-        gtk_widget_set_margin_bottom(hbox, 8);
-        gtk_widget_set_margin_start(hbox, 12);
-        gtk_widget_set_margin_end(hbox, 12);
+        GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+        gtk_widget_set_margin_top(hbox, 6);
+        gtk_widget_set_margin_bottom(hbox, 6);
+        gtk_widget_set_margin_start(hbox, 10);
+        gtk_widget_set_margin_end(hbox, 10);
 
-        /* Signal strength bar indicator */
+        /* Signal bar */
         const gchar *bars = (ap->signal_strength >= 75) ? "▂▄▆█" :
                             (ap->signal_strength >= 50) ? "▂▄▆_" :
                             (ap->signal_strength >= 25) ? "▂▄__" : "▂___";
 
-        /* Signal icon & percentage */
         GtkWidget *sig_lbl = gtk_label_new(NULL);
         gchar *sig_markup = g_strdup_printf(
-            "<span font_family='monospace' size='medium' weight='bold' color='%s'>%s</span> <span size='small' color='#a6adc8'>%u%%</span>",
-            (ap->signal_strength >= 60) ? "#a6e3a1" : (ap->signal_strength >= 35) ? "#f9e2af" : "#f38ba8",
-            bars, ap->signal_strength
+            "<span font_family='monospace' size='small' weight='bold' color='%s'>%s</span>",
+            (ap->signal_strength >= 50) ? "#a6e3a1" : "#f9e2af", bars
         );
         gtk_label_set_markup(GTK_LABEL(sig_lbl), sig_markup);
         gtk_box_append(GTK_BOX(hbox), sig_lbl);
         g_free(sig_markup);
 
-        /* SSID and Frequency label */
+        /* SSID */
         gchar *escaped_ssid = g_markup_escape_text(ap->ssid ? ap->ssid : "Hidden", -1);
-        double freq_ghz = (double)ap->frequency / 1000.0;
-        gchar *name_markup = g_strdup_printf(
-            "<span weight='bold' size='medium'>%s</span>  <span size='small' color='#89b4fa'>%.1f GHz</span>",
-            escaped_ssid, freq_ghz
-        );
         GtkWidget *name_lbl = gtk_label_new(NULL);
+        gchar *name_markup = g_strdup_printf("<span weight='bold'>%s</span>", escaped_ssid);
         gtk_label_set_markup(GTK_LABEL(name_lbl), name_markup);
         gtk_widget_set_halign(name_lbl, GTK_ALIGN_START);
         gtk_widget_set_hexpand(name_lbl, TRUE);
@@ -235,9 +225,9 @@ static void populate_wifi_list(WifiSelectDialog *dlg)
         g_free(name_markup);
         g_free(escaped_ssid);
 
-        /* Badges: Connected, Saved, Security */
+        /* Badges */
         if (ap->is_active) {
-            GtkWidget *act_lbl = gtk_label_new("● Connected");
+            GtkWidget *act_lbl = gtk_label_new("Connected");
             gtk_widget_add_css_class(act_lbl, "badge");
             gtk_widget_add_css_class(act_lbl, "badge-online");
             gtk_box_append(GTK_BOX(hbox), act_lbl);
@@ -248,21 +238,22 @@ static void populate_wifi_list(WifiSelectDialog *dlg)
             gtk_box_append(GTK_BOX(hbox), sav_lbl);
         }
 
-        /* Security badge */
-        GtkWidget *sec_lbl = gtk_label_new(NULL);
-        gboolean is_open = (g_strcmp0(ap->security_str, "Open") == 0);
-        gchar *sec_markup = g_strdup_printf("<span size='small' color='#a6adc8'>%s %s</span>",
-            is_open ? "🔓" : "🔒",
-            ap->security_str ? ap->security_str : "Open");
-        gtk_label_set_markup(GTK_LABEL(sec_lbl), sec_markup);
+        double freq_ghz = (double)ap->frequency / 1000.0;
+        gchar *freq_str = g_strdup_printf("%.1fG", freq_ghz);
+        GtkWidget *freq_lbl = gtk_label_new(freq_str);
+        gtk_widget_add_css_class(freq_lbl, "badge");
+        gtk_widget_add_css_class(freq_lbl, "badge-active");
+        gtk_box_append(GTK_BOX(hbox), freq_lbl);
+        g_free(freq_str);
+
+        GtkWidget *sec_lbl = gtk_label_new(g_strcmp0(ap->security_str, "Open") == 0 ? "🔓" : "🔒");
         gtk_box_append(GTK_BOX(hbox), sec_lbl);
-        g_free(sec_markup);
 
         gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), hbox);
 
         g_object_set_data_full(G_OBJECT(row), "ssid", g_strdup(ap->ssid), g_free);
         g_object_set_data(G_OBJECT(row), "is_saved", GINT_TO_POINTER(ap->is_saved));
-        g_object_set_data(G_OBJECT(row), "is_open", GINT_TO_POINTER(is_open));
+        g_object_set_data(G_OBJECT(row), "is_open", GINT_TO_POINTER(g_strcmp0(ap->security_str, "Open") == 0));
 
         gtk_list_box_append(GTK_LIST_BOX(dlg->list_box), row);
     }
@@ -286,8 +277,7 @@ static void on_dialog_scan_ready(GObject *source, GAsyncResult *res, gpointer us
     }
 
     populate_wifi_list(dlg);
-    gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
-        "<span size='small' color='#a6e3a1'>Scan complete. Select a network to connect.</span>");
+    gtk_label_set_text(GTK_LABEL(dlg->status_lbl), "");
 }
 
 static void on_dialog_scan_clicked(GtkButton *btn, gpointer user_data)
@@ -298,7 +288,7 @@ static void on_dialog_scan_clicked(GtkButton *btn, gpointer user_data)
     gtk_widget_set_sensitive(dlg->connect_btn, FALSE);
     gtk_spinner_start(GTK_SPINNER(dlg->spinner));
     gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
-        "<span size='small' color='#89b4fa'>Scanning for nearby Wi-Fi networks...</span>");
+        "<span size='small' color='#89b4fa'>Scanning networks...</span>");
 
     multiwifi_inventory_request_scan_async(
         dlg->main_win->inventory,
@@ -319,16 +309,14 @@ static void on_dialog_connect_ready(GObject *source, GAsyncResult *res, gpointer
     gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
 
     if (ok) {
-        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
-            "<span size='small' color='#a6e3a1'><b>Connected successfully!</b></span>");
         gtk_window_destroy(GTK_WINDOW(dlg->dialog_window));
     } else {
         gtk_widget_set_sensitive(dlg->connect_btn, TRUE);
         gtk_widget_set_sensitive(dlg->scan_btn, TRUE);
         gtk_widget_set_sensitive(dlg->list_box, TRUE);
 
-        gchar *escaped_msg = g_markup_escape_text(error ? error->message : "Unknown error", -1);
-        gchar *err_markup = g_strdup_printf("<span size='small' color='#f38ba8'><b>Connection failed:</b> %s</span>", escaped_msg);
+        gchar *escaped_msg = g_markup_escape_text(error ? error->message : "Failed to connect", -1);
+        gchar *err_markup = g_strdup_printf("<span size='small' color='#f38ba8'>%s</span>", escaped_msg);
         gtk_label_set_markup(GTK_LABEL(dlg->status_lbl), err_markup);
         g_free(err_markup);
         g_free(escaped_msg);
@@ -356,8 +344,7 @@ static void on_dialog_connect_clicked(GtkButton *btn, gpointer user_data)
 
     gchar *escaped_ssid = g_markup_escape_text(dlg->selected_ssid, -1);
     gchar *status_markup = g_strdup_printf(
-        "<span size='small' color='#89b4fa'>Connecting %s to '%s'...</span>",
-        dlg->ifname, escaped_ssid
+        "<span size='small' color='#89b4fa'>Connecting to '%s'...</span>", escaped_ssid
     );
     gtk_label_set_markup(GTK_LABEL(dlg->status_lbl), status_markup);
     g_free(status_markup);
@@ -390,11 +377,11 @@ static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data)
     dlg->dialog_window = gtk_window_new();
     gtk_widget_add_css_class(dlg->dialog_window, "main-window");
 
-    gchar *win_title = g_strdup_printf("Select Wi-Fi Network (%s)", ifname);
+    gchar *win_title = g_strdup_printf("Wi-Fi Networks (%s)", ifname);
     gtk_window_set_title(GTK_WINDOW(dlg->dialog_window), win_title);
     g_free(win_title);
 
-    gtk_window_set_default_size(GTK_WINDOW(dlg->dialog_window), 540, 520);
+    gtk_window_set_default_size(GTK_WINDOW(dlg->dialog_window), 460, 480);
     gtk_window_set_transient_for(GTK_WINDOW(dlg->dialog_window), GTK_WINDOW(self));
     gtk_window_set_modal(GTK_WINDOW(dlg->dialog_window), TRUE);
 
@@ -405,31 +392,19 @@ static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data)
     dlg->spinner = gtk_spinner_new();
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), dlg->spinner);
 
-    dlg->scan_btn = gtk_button_new_with_label("Rescan");
+    dlg->scan_btn = gtk_button_new_with_label("↻ Rescan");
     gtk_widget_add_css_class(dlg->scan_btn, "btn-secondary");
-    gtk_widget_set_tooltip_text(dlg->scan_btn, "Scan for nearby Wi-Fi access points");
     g_signal_connect(dlg->scan_btn, "clicked", G_CALLBACK(on_dialog_scan_clicked), dlg);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), dlg->scan_btn);
 
     /* Main Container */
-    GtkWidget *content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
-    gtk_widget_set_margin_top(content_box, 16);
-    gtk_widget_set_margin_bottom(content_box, 16);
-    gtk_widget_set_margin_start(content_box, 18);
-    gtk_widget_set_margin_end(content_box, 18);
+    GtkWidget *content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_top(content_box, 14);
+    gtk_widget_set_margin_bottom(content_box, 14);
+    gtk_widget_set_margin_start(content_box, 16);
+    gtk_widget_set_margin_end(content_box, 16);
 
-    /* Subtitle */
-    gchar *sub_markup = g_strdup_printf(
-        "<span size='small' color='#a6adc8'>Select a Wi-Fi network to connect adapter <b color='#89b4fa'>%s</b>:</span>",
-        ifname
-    );
-    GtkWidget *sub_lbl = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(sub_lbl), sub_markup);
-    gtk_widget_set_halign(sub_lbl, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(content_box), sub_lbl);
-    g_free(sub_markup);
-
-    /* List Box in Scrolled Window */
+    /* Scrolled list */
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gtk_widget_set_vexpand(scrolled, TRUE);
 
@@ -440,11 +415,8 @@ static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data)
     gtk_box_append(GTK_BOX(content_box), scrolled);
 
     /* Password Input Box (Hidden initially) */
-    dlg->password_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    dlg->password_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_visible(dlg->password_box, FALSE);
-
-    GtkWidget *pwd_lbl = gtk_label_new("Password:");
-    gtk_box_append(GTK_BOX(dlg->password_box), pwd_lbl);
 
     dlg->password_entry = gtk_password_entry_new();
     gtk_password_entry_set_show_peek_icon(GTK_PASSWORD_ENTRY(dlg->password_entry), TRUE);
@@ -455,11 +427,10 @@ static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data)
     /* Status Label */
     dlg->status_lbl = gtk_label_new(NULL);
     gtk_label_set_wrap(GTK_LABEL(dlg->status_lbl), TRUE);
-    gtk_label_set_xalign(GTK_LABEL(dlg->status_lbl), 0.0f);
     gtk_box_append(GTK_BOX(content_box), dlg->status_lbl);
 
     /* Bottom Button Row */
-    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     gtk_widget_set_halign(btn_row, GTK_ALIGN_END);
 
     GtkWidget *cancel_btn = gtk_button_new_with_label("Cancel");
@@ -477,10 +448,8 @@ static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data)
 
     gtk_window_set_child(GTK_WINDOW(dlg->dialog_window), content_box);
 
-    /* Cleanup when window is destroyed */
     g_signal_connect_swapped(dlg->dialog_window, "destroy", G_CALLBACK(wifi_select_dialog_free), dlg);
 
-    /* Initial populate */
     populate_wifi_list(dlg);
     gtk_window_present(GTK_WINDOW(dlg->dialog_window));
 }
@@ -491,7 +460,6 @@ static void update_devices_ui(MultiWifiWindow *self)
         return;
     }
 
-    /* Clear previous device widgets from container */
     GtkWidget *child = gtk_widget_get_first_child(self->devices_box);
     while (child != NULL) {
         GtkWidget *next = gtk_widget_get_next_sibling(child);
@@ -504,10 +472,8 @@ static void update_devices_ui(MultiWifiWindow *self)
         GtkWidget *empty_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         gtk_widget_add_css_class(empty_box, "modern-card");
 
-        GtkWidget *empty_label = gtk_label_new(NULL);
-        gtk_label_set_markup(GTK_LABEL(empty_label),
-            "<span color='#a6adc8'><i>Scanning for physical Wi-Fi adapters or NetworkManager not ready...</i></span>");
-        gtk_widget_set_halign(empty_label, GTK_ALIGN_START);
+        GtkWidget *empty_label = gtk_label_new("No Wi-Fi adapters detected.");
+        gtk_widget_add_css_class(empty_label, "badge-offline");
         gtk_box_append(GTK_BOX(empty_box), empty_label);
         gtk_box_append(GTK_BOX(self->devices_box), empty_box);
 
@@ -522,21 +488,19 @@ static void update_devices_ui(MultiWifiWindow *self)
         MultiWifiPathInfo *path = self->path_monitor ?
             multiwifi_path_monitor_find_path(self->path_monitor, info->ifname) : NULL;
 
-        GtkWidget *card_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+        GtkWidget *card_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
         gtk_widget_add_css_class(card_box, "modern-card");
 
-        /* Header row: Hardware icon, Name, MAC, Type Badge, Status Badge */
-        GtkWidget *header_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+        /* Row 1: Header (Icon, Interface, Chip Type, Status Badge) */
+        GtkWidget *header_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
 
         gboolean is_usb = (info->ifname && strstr(info->ifname, "u") != NULL);
         const gchar *hw_icon = is_usb ? "🔌" : "💻";
-        const gchar *type_desc = is_usb ? "USB Adapter" : "PCIe / Internal";
+        const gchar *type_desc = is_usb ? "USB" : "PCIe";
 
         gchar *title_markup = g_strdup_printf(
-            "<span size='medium' weight='bold'>%s %s</span>  <span size='small' color='#6c7086'>[%s]</span>",
-            hw_icon,
-            info->ifname ? info->ifname : "unknown",
-            info->hw_address ? info->hw_address : "no-mac"
+            "<span size='medium' weight='bold'>%s %s</span>",
+            hw_icon, info->ifname ? info->ifname : "unknown"
         );
         GtkWidget *title_lbl = gtk_label_new(NULL);
         gtk_label_set_markup(GTK_LABEL(title_lbl), title_markup);
@@ -544,18 +508,15 @@ static void update_devices_ui(MultiWifiWindow *self)
         gtk_box_append(GTK_BOX(header_row), title_lbl);
         g_free(title_markup);
 
-        /* Hardware type badge */
         GtkWidget *hw_badge = gtk_label_new(type_desc);
         gtk_widget_add_css_class(hw_badge, "badge");
         gtk_widget_add_css_class(hw_badge, "badge-hw");
         gtk_box_append(GTK_BOX(header_row), hw_badge);
 
-        /* Spacer to push status badge to the right */
         GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
         gtk_widget_set_hexpand(spacer, TRUE);
         gtk_box_append(GTK_BOX(header_row), spacer);
 
-        /* Status badge */
         GtkWidget *badge_lbl = gtk_label_new(NULL);
         gtk_widget_add_css_class(badge_lbl, "badge");
         if (path != NULL) {
@@ -579,124 +540,102 @@ static void update_devices_ui(MultiWifiWindow *self)
             gtk_label_set_text(GTK_LABEL(badge_lbl), "● Connected");
             gtk_widget_add_css_class(badge_lbl, "badge-online");
         } else {
-            gtk_label_set_text(GTK_LABEL(badge_lbl), "○ Disconnected");
+            gtk_label_set_text(GTK_LABEL(badge_lbl), "○ Idle");
             gtk_widget_add_css_class(badge_lbl, "badge-offline");
         }
         gtk_box_append(GTK_BOX(header_row), badge_lbl);
         gtk_box_append(GTK_BOX(card_box), header_row);
 
-        /* Connection / SSID Details */
+        /* Row 2: Wi-Fi SSID & Switch Action */
+        GtkWidget *mid_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+        gtk_widget_set_valign(mid_row, GTK_ALIGN_CENTER);
+
         if (info->state == MULTIWIFI_DEVICE_STATE_CONNECTED) {
-            GtkWidget *ssid_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-            double freq_ghz = (double)info->frequency / 1000.0;
+            GtkWidget *ssid_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+            gtk_widget_set_hexpand(ssid_box, TRUE);
+
+            GtkWidget *top_ssid = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
             gchar *escaped_ssid = g_markup_escape_text(info->ssid ? info->ssid : "Hidden", -1);
-
-            const gchar *bars = (info->signal_strength >= 75) ? "▂▄▆█" :
-                                (info->signal_strength >= 50) ? "▂▄▆_" :
-                                (info->signal_strength >= 25) ? "▂▄__" : "▂___";
-
-            gchar *ssid_markup = g_strdup_printf(
-                "<span size='x-large' weight='bold'>📶 %s</span>", escaped_ssid
-            );
+            gchar *ssid_markup = g_strdup_printf("<span size='large' weight='bold'>📶 %s</span>", escaped_ssid);
             GtkWidget *ssid_lbl = gtk_label_new(NULL);
             gtk_label_set_markup(GTK_LABEL(ssid_lbl), ssid_markup);
-            gtk_box_append(GTK_BOX(ssid_box), ssid_lbl);
+            gtk_box_append(GTK_BOX(top_ssid), ssid_lbl);
             g_free(ssid_markup);
+            g_free(escaped_ssid);
 
-            /* Frequency badge */
+            double freq_ghz = (double)info->frequency / 1000.0;
             gchar *freq_str = g_strdup_printf("%.1f GHz", freq_ghz);
             GtkWidget *freq_badge = gtk_label_new(freq_str);
             gtk_widget_add_css_class(freq_badge, "badge");
             gtk_widget_add_css_class(freq_badge, "badge-active");
-            gtk_box_append(GTK_BOX(ssid_box), freq_badge);
+            gtk_box_append(GTK_BOX(top_ssid), freq_badge);
             g_free(freq_str);
 
-            /* Signal meter badge */
-            gchar *sig_markup = g_strdup_printf(
-                "<span font_family='monospace' size='medium' weight='bold' color='%s'>%s %u%%</span>",
-                (info->signal_strength >= 60) ? "#a6e3a1" : (info->signal_strength >= 35) ? "#f9e2af" : "#f38ba8",
-                bars, info->signal_strength
-            );
-            GtkWidget *sig_lbl = gtk_label_new(NULL);
-            gtk_label_set_markup(GTK_LABEL(sig_lbl), sig_markup);
-            gtk_box_append(GTK_BOX(ssid_box), sig_lbl);
-            g_free(sig_markup);
+            const gchar *bars = (info->signal_strength >= 75) ? "▂▄▆█" :
+                                (info->signal_strength >= 50) ? "▂▄▆_" :
+                                (info->signal_strength >= 25) ? "▂▄__" : "▂___";
+            gchar *sig_str = g_strdup_printf("%s %u%%", bars, info->signal_strength);
+            GtkWidget *sig_badge = gtk_label_new(sig_str);
+            gtk_widget_add_css_class(sig_badge, "badge");
+            gtk_widget_add_css_class(sig_badge, (info->signal_strength >= 50) ? "badge-online" : "badge-degraded");
+            gtk_box_append(GTK_BOX(top_ssid), sig_badge);
+            g_free(sig_str);
 
-            gtk_box_append(GTK_BOX(card_box), ssid_box);
+            gtk_box_append(GTK_BOX(ssid_box), top_ssid);
 
-            /* IP & Profile Details */
-            gchar *escaped_profile = g_markup_escape_text(info->connection_id ? info->connection_id : "Active", -1);
-            gchar *details_markup = g_strdup_printf(
-                "<span size='small' color='#a6adc8'><b>IPv4:</b> <tt>%s</tt>    <b>Gateway:</b> <tt>%s</tt>    <b>Profile:</b> %s</span>",
-                info->ipv4_address ? info->ipv4_address : "Pending DHCP",
-                info->ipv4_gateway ? info->ipv4_gateway : "None",
-                escaped_profile
+            /* Concise IP string */
+            gchar *ip_markup = g_strdup_printf(
+                "<span size='small' color='#6c7086'>IP: <tt>%s</tt></span>",
+                info->ipv4_address ? info->ipv4_address : "Pending"
             );
-            GtkWidget *details_lbl = gtk_label_new(NULL);
-            gtk_label_set_markup(GTK_LABEL(details_lbl), details_markup);
-            gtk_label_set_xalign(GTK_LABEL(details_lbl), 0.0f);
-            gtk_box_append(GTK_BOX(card_box), details_lbl);
-            g_free(details_markup);
-            g_free(escaped_profile);
-            g_free(escaped_ssid);
+            GtkWidget *ip_lbl = gtk_label_new(NULL);
+            gtk_label_set_markup(GTK_LABEL(ip_lbl), ip_markup);
+            gtk_label_set_xalign(GTK_LABEL(ip_lbl), 0.0f);
+            gtk_box_append(GTK_BOX(ssid_box), ip_lbl);
+            g_free(ip_markup);
+
+            gtk_box_append(GTK_BOX(mid_row), ssid_box);
         } else {
-            GtkWidget *idle_lbl = gtk_label_new(NULL);
-            gtk_label_set_markup(GTK_LABEL(idle_lbl),
-                "<span size='small' color='#6c7086'><i>Adapter is idle. Ready to connect to Wi-Fi.</i></span>");
-            gtk_label_set_xalign(GTK_LABEL(idle_lbl), 0.0f);
-            gtk_box_append(GTK_BOX(card_box), idle_lbl);
+            GtkWidget *idle_lbl = gtk_label_new("Not connected");
+            gtk_widget_set_hexpand(idle_lbl, TRUE);
+            gtk_widget_set_halign(idle_lbl, GTK_ALIGN_START);
+            gtk_box_append(GTK_BOX(mid_row), idle_lbl);
         }
 
-        /* Path Diagnostics Metrics Card */
-        if (path != NULL && path->state != MULTIWIFI_PATH_STATE_OFFLINE) {
-            GtkWidget *metrics_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-            gtk_widget_add_css_class(metrics_box, "metrics-card");
-
-            const gchar *eligibility_str = path->is_eligible
-                ? "<span color='#a6e3a1' weight='bold'>Eligible</span>"
-                : "<span color='#f38ba8' weight='bold'>Excluded</span>";
-
-            const gchar *loss_color = (path->packet_loss_percent == 0) ? "#a6e3a1" :
-                                      (path->packet_loss_percent <= 10) ? "#f9e2af" : "#f38ba8";
-
-            gchar *escaped_reason = g_markup_escape_text(path->status_reason ? path->status_reason : "Healthy", -1);
-            gchar *metrics_markup = g_strdup_printf(
-                "<span size='small' color='#cdd6f4'>"
-                "<b>Path Quality:</b> Latency: <span weight='bold' color='#89b4fa'>%.1f ms</span> (min: %.1f, max: %.1f, jitter: %.1f)  •  "
-                "Loss: <span weight='bold' color='%s'>%u%%</span>  •  "
-                "Status: <b>%s</b>  •  Multi-Path: %s</span>",
-                path->rtt_ms,
-                path->min_rtt_ms,
-                path->max_rtt_ms,
-                path->jitter_ms,
-                loss_color,
-                path->packet_loss_percent,
-                escaped_reason,
-                eligibility_str
-            );
-            GtkWidget *metrics_lbl = gtk_label_new(NULL);
-            gtk_label_set_markup(GTK_LABEL(metrics_lbl), metrics_markup);
-            gtk_label_set_xalign(GTK_LABEL(metrics_lbl), 0.0f);
-            gtk_box_append(GTK_BOX(metrics_box), metrics_lbl);
-            g_free(metrics_markup);
-            g_free(escaped_reason);
-
-            gtk_box_append(GTK_BOX(card_box), metrics_box);
-        }
-
-        /* Action row: Wi-Fi network selection button */
-        GtkWidget *action_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-        gtk_widget_set_margin_top(action_row, 4);
-
-        const gchar *btn_label = (info->state == MULTIWIFI_DEVICE_STATE_CONNECTED)
-            ? "📶 Switch Wi-Fi Network..." : "📶 Connect to Wi-Fi...";
+        /* Action button */
+        const gchar *btn_label = (info->state == MULTIWIFI_DEVICE_STATE_CONNECTED) ? "Switch Wi-Fi" : "Connect";
         GtkWidget *wifi_btn = gtk_button_new_with_label(btn_label);
         gtk_widget_add_css_class(wifi_btn, "btn-secondary");
-        gtk_widget_set_tooltip_text(wifi_btn, "Scan and associate this adapter with a distinct Wi-Fi network");
         g_object_set_data_full(G_OBJECT(wifi_btn), "ifname", g_strdup(info->ifname), g_free);
         g_signal_connect(wifi_btn, "clicked", G_CALLBACK(on_select_wifi_clicked), self);
-        gtk_box_append(GTK_BOX(action_row), wifi_btn);
-        gtk_box_append(GTK_BOX(card_box), action_row);
+        gtk_box_append(GTK_BOX(mid_row), wifi_btn);
+
+        gtk_box_append(GTK_BOX(card_box), mid_row);
+
+        /* Row 3: Minimal Metric Chips (replacing wall of debug text) */
+        if (path != NULL && path->state != MULTIWIFI_PATH_STATE_OFFLINE) {
+            GtkWidget *chips_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+            gtk_widget_set_margin_top(chips_row, 4);
+
+            gchar *rtt_str = g_strdup_printf("⚡ %.1f ms", path->rtt_ms);
+            GtkWidget *rtt_chip = gtk_label_new(rtt_str);
+            gtk_widget_add_css_class(rtt_chip, "metric-chip");
+            gtk_box_append(GTK_BOX(chips_row), rtt_chip);
+            g_free(rtt_str);
+
+            gchar *loss_str = g_strdup_printf("📉 %u%% Loss", path->packet_loss_percent);
+            GtkWidget *loss_chip = gtk_label_new(loss_str);
+            gtk_widget_add_css_class(loss_chip, "metric-chip");
+            gtk_box_append(GTK_BOX(chips_row), loss_chip);
+            g_free(loss_str);
+
+            const gchar *steer_str = path->is_eligible ? "🔀 Active Link" : "Standby";
+            GtkWidget *steer_chip = gtk_label_new(steer_str);
+            gtk_widget_add_css_class(steer_chip, "metric-chip");
+            gtk_box_append(GTK_BOX(chips_row), steer_chip);
+
+            gtk_box_append(GTK_BOX(card_box), chips_row);
+        }
 
         if (path != NULL) {
             multiwifi_path_info_free(path);
@@ -735,9 +674,14 @@ static void on_paths_changed(MultiWifiPathMonitor *mon, gpointer user_data)
 
 static void update_control_buttons_state(MultiWifiWindow *self)
 {
-    if (self->lb_btn == NULL || self->bonding_btn == NULL || self->daemon_banner == NULL) {
+    if (self->lb_switch == NULL || self->bonding_switch == NULL || self->daemon_banner == NULL) {
         return;
     }
+
+    self->updating_switches = TRUE;
+    gtk_switch_set_active(GTK_SWITCH(self->lb_switch), self->lb_active);
+    gtk_switch_set_active(GTK_SWITCH(self->bonding_switch), self->bonding_active);
+    self->updating_switches = FALSE;
 
     if (self->daemon_connected) {
         if (self->daemon_status_lbl != NULL) {
@@ -746,67 +690,26 @@ static void update_control_buttons_state(MultiWifiWindow *self)
             gtk_label_set_text(GTK_LABEL(self->daemon_status_lbl), "● Daemon Active");
         }
 
-        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-            "<span size='small' color='#a6e3a1'>✔ <b>System Daemon Active:</b> Connected via System D-Bus. Privileged actions authorized via Polkit.</span>");
+        gtk_widget_set_visible(self->daemon_banner, FALSE);
+        gtk_widget_set_sensitive(self->lb_switch, !self->bonding_active);
+        gtk_widget_set_sensitive(self->bonding_switch, !self->lb_active);
 
-        gtk_widget_set_sensitive(self->lb_btn, !self->bonding_active);
-        gtk_widget_set_sensitive(self->bonding_btn, !self->lb_active);
-
-        /* LB Button State & Styling */
-        if (self->lb_active) {
-            gtk_button_set_label(GTK_BUTTON(self->lb_btn), "⏹ Stop Load Balancing");
-            gtk_widget_remove_css_class(self->lb_btn, "btn-primary");
-            gtk_widget_add_css_class(self->lb_btn, "btn-stop");
-            gtk_widget_set_tooltip_text(self->lb_btn, "Stop active multi-path policy routing and restore default route");
-        } else {
-            gtk_button_set_label(GTK_BUTTON(self->lb_btn), "⚡ Start Load Balancing");
-            gtk_widget_remove_css_class(self->lb_btn, "btn-stop");
-            gtk_widget_add_css_class(self->lb_btn, "btn-primary");
-            gtk_widget_set_tooltip_text(self->lb_btn, "Aggregate connected Wi-Fi uplinks with flow-affinity load balancing");
-        }
-
-        /* Bonding Button State & Styling */
-        if (self->bonding_active) {
-            gtk_button_set_label(GTK_BUTTON(self->bonding_btn), "⏹ Stop Bonding");
-            gtk_widget_remove_css_class(self->bonding_btn, "btn-secondary");
-            gtk_widget_add_css_class(self->bonding_btn, "btn-stop");
-            gtk_widget_set_tooltip_text(self->bonding_btn, "Terminate MPTCP bonding tunnel");
-        } else {
-            gtk_button_set_label(GTK_BUTTON(self->bonding_btn), "🔗 Start Bonding");
-            gtk_widget_remove_css_class(self->bonding_btn, "btn-stop");
-            gtk_widget_add_css_class(self->bonding_btn, "btn-secondary");
-            gtk_widget_set_tooltip_text(self->bonding_btn, "Establish MPTCP bonding tunnel through aggregation server");
-        }
-
-        /* Mode Banner info */
-        if (self->mode_pill != NULL && self->mode_title_lbl != NULL && self->mode_desc_lbl != NULL) {
+        if (self->mode_pill != NULL) {
             if (self->bonding_active) {
                 gtk_label_set_text(GTK_LABEL(self->mode_pill), "MPTCP Bonding");
                 gtk_widget_remove_css_class(self->mode_pill, "badge-offline");
                 gtk_widget_remove_css_class(self->mode_pill, "badge-online");
                 gtk_widget_add_css_class(self->mode_pill, "badge-active");
-                gtk_label_set_markup(GTK_LABEL(self->mode_title_lbl),
-                    "<span size='medium' weight='bold' color='#cdd6f4'>Multi-Path Tunnel Bonding</span>");
-                gtk_label_set_markup(GTK_LABEL(self->mode_desc_lbl),
-                    "<span size='small' color='#a6adc8'>Single TCP stream aggregation over multiple uplinks with out-of-order reassembly.</span>");
             } else if (self->lb_active) {
-                gtk_label_set_text(GTK_LABEL(self->mode_pill), "Round-Robin LB");
+                gtk_label_set_text(GTK_LABEL(self->mode_pill), "Load Balancing");
                 gtk_widget_remove_css_class(self->mode_pill, "badge-offline");
                 gtk_widget_remove_css_class(self->mode_pill, "badge-online");
                 gtk_widget_add_css_class(self->mode_pill, "badge-active");
-                gtk_label_set_markup(GTK_LABEL(self->mode_title_lbl),
-                    "<span size='medium' weight='bold' color='#cdd6f4'>Flow Multiplexing Load Balancer</span>");
-                gtk_label_set_markup(GTK_LABEL(self->mode_desc_lbl),
-                    "<span size='small' color='#a6adc8'>Per-flow hash steering balancing sockets and connections across active Wi-Fi adapters.</span>");
             } else {
-                gtk_label_set_text(GTK_LABEL(self->mode_pill), "Active-Backup");
+                gtk_label_set_text(GTK_LABEL(self->mode_pill), "Dual-Link Active");
                 gtk_widget_remove_css_class(self->mode_pill, "badge-active");
                 gtk_widget_remove_css_class(self->mode_pill, "badge-offline");
                 gtk_widget_add_css_class(self->mode_pill, "badge-online");
-                gtk_label_set_markup(GTK_LABEL(self->mode_title_lbl),
-                    "<span size='medium' weight='bold' color='#cdd6f4'>Dual-Link Multi-Homing Ready</span>");
-                gtk_label_set_markup(GTK_LABEL(self->mode_desc_lbl),
-                    "<span size='small' color='#a6adc8'>Multiple interfaces connected and monitored with automatic health-aware failover.</span>");
             }
         }
     } else {
@@ -817,23 +720,16 @@ static void update_control_buttons_state(MultiWifiWindow *self)
         }
 
         gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-            "<span size='small' color='#f38ba8'>✕ <b>System Daemon Inactive:</b> Privileged network actions require <tt>multiwifi-daemon</tt>.\n"
-            "Run <tt>sudo systemctl start multiwifi-daemon</tt> to enable Load Balancing &amp; Bonding controls.</span>");
+            "<span size='small' color='#f38ba8'>⚠ Daemon offline • Routing controls disabled</span>");
+        gtk_widget_set_visible(self->daemon_banner, TRUE);
+        gtk_widget_set_sensitive(self->lb_switch, FALSE);
+        gtk_widget_set_sensitive(self->bonding_switch, FALSE);
 
-        gtk_widget_set_sensitive(self->lb_btn, FALSE);
-        gtk_widget_set_sensitive(self->bonding_btn, FALSE);
-        gtk_widget_set_tooltip_text(self->lb_btn, "Unavailable: MultiWiFi daemon is not running on system bus");
-        gtk_widget_set_tooltip_text(self->bonding_btn, "Unavailable: MultiWiFi daemon is not running on system bus");
-
-        if (self->mode_pill != NULL && self->mode_title_lbl != NULL && self->mode_desc_lbl != NULL) {
+        if (self->mode_pill != NULL) {
             gtk_label_set_text(GTK_LABEL(self->mode_pill), "Standalone");
             gtk_widget_remove_css_class(self->mode_pill, "badge-active");
             gtk_widget_remove_css_class(self->mode_pill, "badge-online");
             gtk_widget_add_css_class(self->mode_pill, "badge-offline");
-            gtk_label_set_markup(GTK_LABEL(self->mode_title_lbl),
-                "<span size='medium' weight='bold' color='#cdd6f4'>Monitoring &amp; Inventory Mode</span>");
-            gtk_label_set_markup(GTK_LABEL(self->mode_desc_lbl),
-                "<span size='small' color='#a6adc8'>Monitoring adapter quality and network availability. Daemon required for routing mutation.</span>");
         }
     }
 }
@@ -878,30 +774,18 @@ static void on_lb_action_done(GObject *source, GAsyncResult *res, gpointer user_
     update_control_buttons_state(self);
 }
 
-static void on_lb_clicked(GtkButton *btn, gpointer user_data)
+static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data)
 {
-    (void)btn;
+    (void)sw;
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    if (self->updating_switches) {
+        return FALSE;
+    }
     if (!self->daemon_connected || self->system_bus == NULL) {
-        return;
+        return TRUE;
     }
 
-    if (self->lb_active) {
-        g_dbus_connection_call(
-            self->system_bus,
-            MULTIWIFI_DBUS_NAME,
-            MULTIWIFI_DBUS_PATH,
-            MULTIWIFI_DBUS_INTERFACE,
-            "StopLoadBalancing",
-            NULL,
-            G_VARIANT_TYPE("(s)"),
-            G_DBUS_CALL_FLAGS_NONE,
-            10000,
-            NULL,
-            on_lb_action_done,
-            self
-        );
-    } else {
+    if (state && !self->lb_active) {
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
         g_dbus_connection_call(
@@ -918,7 +802,23 @@ static void on_lb_clicked(GtkButton *btn, gpointer user_data)
             on_lb_action_done,
             self
         );
+    } else if (!state && self->lb_active) {
+        g_dbus_connection_call(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "StopLoadBalancing",
+            NULL,
+            G_VARIANT_TYPE("(s)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            10000,
+            NULL,
+            on_lb_action_done,
+            self
+        );
     }
+    return FALSE;
 }
 
 static void on_bonding_action_done(GObject *source, GAsyncResult *res, gpointer user_data)
@@ -936,30 +836,18 @@ static void on_bonding_action_done(GObject *source, GAsyncResult *res, gpointer 
     update_control_buttons_state(self);
 }
 
-static void on_bonding_clicked(GtkButton *btn, gpointer user_data)
+static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data)
 {
-    (void)btn;
+    (void)sw;
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    if (self->updating_switches) {
+        return FALSE;
+    }
     if (!self->daemon_connected || self->system_bus == NULL) {
-        return;
+        return TRUE;
     }
 
-    if (self->bonding_active) {
-        g_dbus_connection_call(
-            self->system_bus,
-            MULTIWIFI_DBUS_NAME,
-            MULTIWIFI_DBUS_PATH,
-            MULTIWIFI_DBUS_INTERFACE,
-            "StopBonding",
-            NULL,
-            G_VARIANT_TYPE("(s)"),
-            G_DBUS_CALL_FLAGS_NONE,
-            10000,
-            NULL,
-            on_bonding_action_done,
-            self
-        );
-    } else {
+    if (state && !self->bonding_active) {
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
         g_variant_builder_add(&b, "{sv}", "server_host", g_variant_new_string("127.0.0.1"));
@@ -980,7 +868,23 @@ static void on_bonding_clicked(GtkButton *btn, gpointer user_data)
             on_bonding_action_done,
             self
         );
+    } else if (!state && self->bonding_active) {
+        g_dbus_connection_call(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "StopBonding",
+            NULL,
+            G_VARIANT_TYPE("(s)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            10000,
+            NULL,
+            on_bonding_action_done,
+            self
+        );
     }
+    return FALSE;
 }
 
 static void on_daemon_name_appeared(GDBusConnection *connection,
@@ -996,7 +900,6 @@ static void on_daemon_name_appeared(GDBusConnection *connection,
         self->system_bus = g_object_ref(connection);
     }
 
-    /* Query current mode on daemon */
     g_dbus_connection_call(
         self->system_bus,
         MULTIWIFI_DBUS_NAME,
@@ -1079,30 +982,19 @@ static void multiwifi_window_dispose(GObject *object)
 
 static void multiwifi_window_init(MultiWifiWindow *self)
 {
-    /* Apply modern CSS stylesheet */
     multiwifi_window_apply_css();
 
     gtk_window_set_title(GTK_WINDOW(self), "MultiWiFi");
-    gtk_window_set_default_size(GTK_WINDOW(self), 760, 680);
+    gtk_window_set_default_size(GTK_WINDOW(self), 680, 600);
     gtk_widget_add_css_class(GTK_WIDGET(self), "main-window");
 
     /* Header Bar */
     GtkWidget *header = gtk_header_bar_new();
     gtk_window_set_titlebar(GTK_WINDOW(self), header);
 
-    /* Center Title Widget */
-    GtkWidget *title_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_valign(title_box, GTK_ALIGN_CENTER);
-
-    GtkWidget *title_lbl = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(title_lbl), "<span weight='bold' size='medium'>MultiWiFi</span>");
-    gtk_box_append(GTK_BOX(title_box), title_lbl);
-
-    GtkWidget *sub_lbl = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(sub_lbl), "<span size='small' color='#89b4fa'>Multi-Path Wi-Fi Bonding &amp; Load Balancer</span>");
-    gtk_box_append(GTK_BOX(title_box), sub_lbl);
-
-    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title_box);
+    GtkWidget *title_lbl = gtk_label_new("MultiWiFi");
+    gtk_widget_add_css_class(title_lbl, "title");
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title_lbl);
 
     /* Left: Daemon Status Badge */
     self->daemon_status_lbl = gtk_label_new("○ Standalone");
@@ -1110,16 +1002,17 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     gtk_widget_add_css_class(self->daemon_status_lbl, "badge-offline");
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), self->daemon_status_lbl);
 
-    /* Right: Probe Paths Button */
-    GtkWidget *diag_btn = gtk_button_new_with_label("↻ Probe Paths");
+    /* Right: Refresh button */
+    GtkWidget *diag_btn = gtk_button_new_with_label("↻ Probe");
     gtk_widget_add_css_class(diag_btn, "btn-secondary");
-    gtk_widget_set_tooltip_text(diag_btn, "Trigger real-time latency & quality diagnostics cycle across all uplinks");
+    gtk_widget_set_tooltip_text(diag_btn, "Probe latency and health across all uplinks");
     g_signal_connect(diag_btn, "clicked", G_CALLBACK(on_diagnostics_clicked), self);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), diag_btn);
 
-    /* Watch system bus for MultiWiFi System Daemon */
+    /* Watch system bus for daemon */
     self->system_bus = NULL;
     self->daemon_connected = FALSE;
+    self->updating_switches = FALSE;
     self->bus_watcher_id = g_bus_watch_name(
         G_BUS_TYPE_SYSTEM,
         MULTIWIFI_DBUS_NAME,
@@ -1130,69 +1023,99 @@ static void multiwifi_window_init(MultiWifiWindow *self)
         NULL
     );
 
-    /* Scrolled Window Container */
+    /* Scrolled Window */
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 
-    /* Main Box inside Scrolled Window */
-    GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 18);
-    gtk_widget_set_margin_top(main_box, 20);
-    gtk_widget_set_margin_bottom(main_box, 20);
-    gtk_widget_set_margin_start(main_box, 20);
-    gtk_widget_set_margin_end(main_box, 20);
+    GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
+    gtk_widget_set_margin_top(main_box, 16);
+    gtk_widget_set_margin_bottom(main_box, 16);
+    gtk_widget_set_margin_start(main_box, 18);
+    gtk_widget_set_margin_end(main_box, 18);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), main_box);
     gtk_window_set_child(GTK_WINDOW(self), scrolled);
 
-    /* 1. Hero Dashboard Card: Multi-Path Operations */
-    GtkWidget *hero_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    /* 1. Multi-Path Controller Hero Card with Switches */
+    GtkWidget *hero_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_add_css_class(hero_card, "hero-card");
 
-    GtkWidget *hero_top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *hero_sec_lbl = gtk_label_new("MULTI-PATH TRAFFIC CONTROLLER");
+    GtkWidget *hero_top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *hero_sec_lbl = gtk_label_new("TRAFFIC CONTROLLER");
     gtk_widget_add_css_class(hero_sec_lbl, "section-header");
     gtk_widget_set_halign(hero_sec_lbl, GTK_ALIGN_START);
     gtk_widget_set_hexpand(hero_sec_lbl, TRUE);
     gtk_box_append(GTK_BOX(hero_top), hero_sec_lbl);
 
-    self->mode_pill = gtk_label_new("Active-Backup");
+    self->mode_pill = gtk_label_new("Dual-Link Active");
     gtk_widget_add_css_class(self->mode_pill, "badge");
     gtk_widget_add_css_class(self->mode_pill, "badge-online");
     gtk_box_append(GTK_BOX(hero_top), self->mode_pill);
     gtk_box_append(GTK_BOX(hero_card), hero_top);
 
-    self->mode_title_lbl = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(self->mode_title_lbl),
-        "<span size='medium' weight='bold' color='#cdd6f4'>Dual-Link Multi-Homing Ready</span>");
-    gtk_label_set_xalign(GTK_LABEL(self->mode_title_lbl), 0.0f);
-    gtk_box_append(GTK_BOX(hero_card), self->mode_title_lbl);
+    /* Action Row 1: Load Balancing Switch */
+    GtkWidget *row1 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_widget_add_css_class(row1, "action-row");
 
-    self->mode_desc_lbl = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(self->mode_desc_lbl),
-        "<span size='small' color='#a6adc8'>Multiple interfaces connected and monitored with automatic health-aware failover.</span>");
-    gtk_label_set_xalign(GTK_LABEL(self->mode_desc_lbl), 0.0f);
-    gtk_label_set_wrap(GTK_LABEL(self->mode_desc_lbl), TRUE);
-    gtk_box_append(GTK_BOX(hero_card), self->mode_desc_lbl);
+    GtkWidget *icon1 = gtk_label_new("⚡");
+    gtk_box_append(GTK_BOX(row1), icon1);
 
-    /* Action buttons row */
-    GtkWidget *ops_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    gtk_widget_set_margin_top(ops_box, 6);
+    GtkWidget *box1 = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    GtkWidget *t1 = gtk_label_new("Load Balancing");
+    gtk_widget_set_halign(t1, GTK_ALIGN_START);
+    gchar *t1_markup = g_strdup("<span weight='bold'>Load Balancing</span>");
+    gtk_label_set_markup(GTK_LABEL(t1), t1_markup);
+    g_free(t1_markup);
+    gtk_box_append(GTK_BOX(box1), t1);
 
-    self->lb_btn = gtk_button_new_with_label("⚡ Start Load Balancing");
-    gtk_widget_add_css_class(self->lb_btn, "btn-primary");
-    g_signal_connect(self->lb_btn, "clicked", G_CALLBACK(on_lb_clicked), self);
-    gtk_box_append(GTK_BOX(ops_box), self->lb_btn);
+    GtkWidget *s1 = gtk_label_new("Dynamic flow distribution across all Wi-Fi uplinks");
+    gtk_widget_set_halign(s1, GTK_ALIGN_START);
+    gchar *s1_markup = g_strdup("<span size='small' color='#a6adc8'>Dynamic flow distribution across all Wi-Fi uplinks</span>");
+    gtk_label_set_markup(GTK_LABEL(s1), s1_markup);
+    g_free(s1_markup);
+    gtk_box_append(GTK_BOX(box1), s1);
+    gtk_widget_set_hexpand(box1, TRUE);
+    gtk_box_append(GTK_BOX(row1), box1);
 
-    self->bonding_btn = gtk_button_new_with_label("🔗 Start Bonding");
-    gtk_widget_add_css_class(self->bonding_btn, "btn-secondary");
-    g_signal_connect(self->bonding_btn, "clicked", G_CALLBACK(on_bonding_clicked), self);
-    gtk_box_append(GTK_BOX(ops_box), self->bonding_btn);
+    self->lb_switch = gtk_switch_new();
+    gtk_widget_set_valign(self->lb_switch, GTK_ALIGN_CENTER);
+    g_signal_connect(self->lb_switch, "state-set", G_CALLBACK(on_lb_switch_state_set), self);
+    gtk_box_append(GTK_BOX(row1), self->lb_switch);
+    gtk_box_append(GTK_BOX(hero_card), row1);
 
-    gtk_box_append(GTK_BOX(hero_card), ops_box);
+    /* Action Row 2: Tunnel Bonding Switch */
+    GtkWidget *row2 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_widget_add_css_class(row2, "action-row");
 
-    /* Daemon status banner inside hero card */
+    GtkWidget *icon2 = gtk_label_new("🔗");
+    gtk_box_append(GTK_BOX(row2), icon2);
+
+    GtkWidget *box2 = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    GtkWidget *t2 = gtk_label_new(NULL);
+    gtk_widget_set_halign(t2, GTK_ALIGN_START);
+    gchar *t2_markup = g_strdup("<span weight='bold'>Tunnel Bonding</span>");
+    gtk_label_set_markup(GTK_LABEL(t2), t2_markup);
+    g_free(t2_markup);
+    gtk_box_append(GTK_BOX(box2), t2);
+
+    GtkWidget *s2 = gtk_label_new(NULL);
+    gtk_widget_set_halign(s2, GTK_ALIGN_START);
+    gchar *s2_markup = g_strdup("<span size='small' color='#a6adc8'>MPTCP tunnel bonding for aggregated single streams</span>");
+    gtk_label_set_markup(GTK_LABEL(s2), s2_markup);
+    g_free(s2_markup);
+    gtk_box_append(GTK_BOX(box2), s2);
+    gtk_widget_set_hexpand(box2, TRUE);
+    gtk_box_append(GTK_BOX(row2), box2);
+
+    self->bonding_switch = gtk_switch_new();
+    gtk_widget_set_valign(self->bonding_switch, GTK_ALIGN_CENTER);
+    g_signal_connect(self->bonding_switch, "state-set", G_CALLBACK(on_bonding_switch_state_set), self);
+    gtk_box_append(GTK_BOX(row2), self->bonding_switch);
+    gtk_box_append(GTK_BOX(hero_card), row2);
+
+    /* Minimal Daemon Banner */
     self->daemon_banner = gtk_label_new(NULL);
-    gtk_label_set_wrap(GTK_LABEL(self->daemon_banner), TRUE);
-    gtk_label_set_xalign(GTK_LABEL(self->daemon_banner), 0.0f);
+    gtk_widget_set_halign(self->daemon_banner, GTK_ALIGN_START);
+    gtk_widget_set_visible(self->daemon_banner, FALSE);
     gtk_box_append(GTK_BOX(hero_card), self->daemon_banner);
 
     gtk_box_append(GTK_BOX(main_box), hero_card);
@@ -1201,81 +1124,68 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     self->bonding_active = FALSE;
     update_control_buttons_state(self);
 
-    /* 2. Discovered Wi-Fi Uplinks Section */
-    GtkWidget *dev_sec_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    GtkWidget *dev_sec_title = gtk_label_new("PHYSICAL WI-FI ADAPTERS & UPLINKS");
-    gtk_widget_add_css_class(dev_sec_title, "section-header");
-    gtk_widget_set_halign(dev_sec_title, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(dev_sec_box), dev_sec_title);
-
-    GtkWidget *dev_sec_sub = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(dev_sec_sub),
-        "<span size='small' color='#a6adc8'>Assign distinct Wi-Fi networks to each physical adapter to aggregate bandwidth.</span>");
-    gtk_widget_set_halign(dev_sec_sub, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(dev_sec_box), dev_sec_sub);
-    gtk_box_append(GTK_BOX(main_box), dev_sec_box);
+    /* 2. Wi-Fi Adapters Section */
+    GtkWidget *dev_sec_lbl = gtk_label_new("WI-FI ADAPTERS");
+    gtk_widget_add_css_class(dev_sec_lbl, "section-header");
+    gtk_widget_set_halign(dev_sec_lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(main_box), dev_sec_lbl);
 
     self->devices_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_box_append(GTK_BOX(main_box), self->devices_box);
 
-    /* 3. Platform & Kernel Engine Capabilities Card */
-    GtkWidget *caps_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_widget_add_css_class(caps_card, "subtle-card");
-
-    GtkWidget *caps_title = gtk_label_new("SYSTEM ENGINE & PLATFORM STATUS");
-    gtk_widget_add_css_class(caps_title, "section-header");
-    gtk_widget_set_halign(caps_title, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(caps_card), caps_title);
+    /* 3. Platform Capabilities Chips Row */
+    GtkWidget *caps_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_top(caps_box, 4);
 
     MultiWifiCapabilities *caps = multiwifi_capabilities_new();
     multiwifi_capabilities_probe(caps);
 
-    gchar *escaped_mptcp = g_markup_escape_text(caps->mptcp_details ? caps->mptcp_details : "none", -1);
-    gchar *caps_text = g_strdup_printf(
-        "<span size='small' color='#cdd6f4'>"
-        "✔ <b>Kernel:</b> %s    •    "
-        "✔ <b>NetworkManager:</b> %s    •    "
-        "✔ <b>MPTCP:</b> %s (%s)\n"
-        "✔ <b>nftables / Netfilter:</b> %s    •    "
-        "✔ <b>TUN Interface:</b> %s</span>",
-        caps->kernel_version ? caps->kernel_version : "Unknown",
-        multiwifi_cap_state_to_string(caps->network_manager),
-        multiwifi_cap_state_to_string(caps->kernel_mptcp),
-        escaped_mptcp,
-        multiwifi_cap_state_to_string(caps->nftables),
-        multiwifi_cap_state_to_string(caps->tun_device)
-    );
-    g_free(escaped_mptcp);
+    GtkWidget *c1 = gtk_label_new("🐧 Linux");
+    gtk_widget_add_css_class(c1, "metric-chip");
+    gtk_box_append(GTK_BOX(caps_box), c1);
 
-    self->caps_label = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(self->caps_label), caps_text);
-    gtk_label_set_xalign(GTK_LABEL(self->caps_label), 0.0f);
-    gtk_box_append(GTK_BOX(caps_card), self->caps_label);
+    gboolean nm_ok = (caps->network_manager != MULTIWIFI_CAP_STATE_UNSUPPORTED);
+    GtkWidget *c2 = gtk_label_new(nm_ok ? "📶 NetworkManager" : "✕ NetworkManager");
+    gtk_widget_add_css_class(c2, "metric-chip");
+    gtk_box_append(GTK_BOX(caps_box), c2);
 
-    g_free(caps_text);
+    gboolean mptcp_ok = (caps->kernel_mptcp != MULTIWIFI_CAP_STATE_UNSUPPORTED);
+    GtkWidget *c3 = gtk_label_new(mptcp_ok ? "🔀 MPTCP" : "✕ MPTCP");
+    gtk_widget_add_css_class(c3, "metric-chip");
+    gtk_box_append(GTK_BOX(caps_box), c3);
+
+    gboolean nft_ok = (caps->nftables != MULTIWIFI_CAP_STATE_UNSUPPORTED);
+    GtkWidget *c4 = gtk_label_new(nft_ok ? "🛡️ Netfilter" : "✕ Netfilter");
+    gtk_widget_add_css_class(c4, "metric-chip");
+    gtk_box_append(GTK_BOX(caps_box), c4);
+
+    gboolean tun_ok = (caps->tun_device != MULTIWIFI_CAP_STATE_UNSUPPORTED);
+    GtkWidget *c5 = gtk_label_new(tun_ok ? "🔌 TUN" : "✕ TUN");
+    gtk_widget_add_css_class(c5, "metric-chip");
+    gtk_box_append(GTK_BOX(caps_box), c5);
+
     multiwifi_capabilities_free(caps);
+    gtk_box_append(GTK_BOX(main_box), caps_box);
 
-    gtk_box_append(GTK_BOX(main_box), caps_card);
-
-    /* Initialize Path Monitor (Phase 2) */
+    /* Initialize Path Monitor */
     self->path_monitor = multiwifi_path_monitor_new();
     g_signal_connect(self->path_monitor, "paths-changed",
                      G_CALLBACK(on_paths_changed), self);
     multiwifi_path_monitor_start(self->path_monitor);
 
-    /* Initialize Inventory (Phase 1) */
+    /* Initialize Inventory */
     self->inventory = multiwifi_inventory_new();
     g_signal_connect(self->inventory, "devices-changed",
                      G_CALLBACK(on_inventory_devices_changed), self);
     multiwifi_inventory_start(self->inventory, NULL);
 
-    /* Initial UI render */
     update_devices_ui(self);
 
     /* Footer */
     GtkWidget *footer_lbl = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(footer_lbl),
-        "<span size='small' color='#6c7086'>MultiWiFi " MULTIWIFI_VERSION_STRING " • Native C11 Desktop Engine • Unprivileged User Session</span>");
+    gchar *footer_markup = g_strdup_printf("<span size='small' color='#6c7086'>MultiWiFi %s • Unprivileged Session</span>", MULTIWIFI_VERSION_STRING);
+    gtk_label_set_markup(GTK_LABEL(footer_lbl), footer_markup);
+    g_free(footer_markup);
     gtk_widget_set_halign(footer_lbl, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(main_box), footer_lbl);
 }
