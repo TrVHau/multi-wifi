@@ -209,15 +209,15 @@ ctest --test-dir build --output-on-failure
 
 ## Quick Start
 
-### 1. Enable System Daemon
-```bash
-# Start and enable the system daemon service
-sudo systemctl enable --now multiwifi-daemon
+### 1. One-Click Installation & Removal
+You can easily install or remove MultiWiFi using the automated scripts:
 
-# Verify daemon status on the system bus
-gdbus introspect --system \
-    --dest io.github.multiwifi.Daemon \
-    --object-path /io/github/multiwifi/Daemon
+```bash
+# Automated system installation (builds, installs systemd service, registers D-Bus & Polkit)
+sudo ./install.sh
+
+# Complete and clean uninstallation (removes all files and disables service)
+sudo ./uninstall.sh
 ```
 
 ### 2. Launch Desktop GUI

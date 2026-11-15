@@ -811,7 +811,7 @@ static void update_control_buttons_state(MultiWifiWindow *self)
 
         if (!self->daemon_action_pending) {
             gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-                "<span size='small' color='#f38ba8'>⚠ Daemon offline • Routing controls disabled</span>");
+                "<span size='small' color='#f38ba8'>⚠ Daemon offline • Run 'sudo ./build/multiwifi-daemon' to start</span>");
         }
         gtk_widget_set_sensitive(self->lb_switch, FALSE);
         gtk_widget_set_sensitive(self->bonding_switch, FALSE);
