@@ -3,9 +3,19 @@
 #include "multiwifi/core/logging.h"
 #include "multiwifi/version.h"
 
+static gboolean s_use_session_bus = FALSE;
+
+static const GOptionEntry s_app_entries[] = {
+    { "session", 's', 0, G_OPTION_ARG_NONE, &s_use_session_bus, "Connect to daemon on session bus (for development/testing)", NULL },
+    { NULL, 0, 0, 0, NULL, NULL, NULL }
+};
+
 static void on_app_activate(GtkApplication *app, gpointer user_data)
 {
     (void)user_data;
+    if (s_use_session_bus) {
+        multiwifi_window_set_default_bus_type(G_BUS_TYPE_SESSION);
+    }
     GtkWidget *win = multiwifi_window_new(app);
     gtk_window_present(GTK_WINDOW(win));
 }
@@ -20,6 +30,7 @@ int main(int argc, char *argv[])
         G_APPLICATION_DEFAULT_FLAGS
     );
 
+    g_application_add_main_option_entries(G_APPLICATION(app), s_app_entries);
     g_signal_connect(app, "activate", G_CALLBACK(on_app_activate), NULL);
 
     int status = g_application_run(G_APPLICATION(app), argc, argv);

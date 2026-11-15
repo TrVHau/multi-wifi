@@ -18,6 +18,12 @@ G_DECLARE_FINAL_TYPE(MultiWifiWindow, multiwifi_window, MULTIWIFI, WINDOW, GtkAp
  */
 GtkWidget *multiwifi_window_new(GtkApplication *app);
 
+/**
+ * multiwifi_window_set_default_bus_type:
+ * @bus_type: Target D-Bus type (G_BUS_TYPE_SYSTEM or G_BUS_TYPE_SESSION)
+ */
+void multiwifi_window_set_default_bus_type(GBusType bus_type);
+
 G_END_DECLS
 
 #endif /* MULTIWIFI_WINDOW_H */

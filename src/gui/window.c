@@ -6,6 +6,7 @@
 #include "multiwifi/version.h"
 #include <gio/gio.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <signal.h>
 
 /* Embedded CSS Theme Fallback */
@@ -55,6 +56,7 @@ struct _MultiWifiWindow {
     MultiWifiPathMonitor *path_monitor;
     guint bus_watcher_id;
     GDBusConnection *system_bus;
+    GBusType bus_type;
     gboolean daemon_connected;
     gboolean lb_active;
     gboolean bonding_active;
@@ -95,6 +97,15 @@ static void on_paths_changed(MultiWifiPathMonitor *mon, gpointer user_data);
 static void on_status_query_done(GObject *source, GAsyncResult *res, gpointer user_data);
 static void start_daemon_via_pkexec(MultiWifiWindow *self);
 static void stop_daemon_via_pkexec(MultiWifiWindow *self);
+static void start_daemon_via_session(MultiWifiWindow *self);
+static void on_spawned_daemon_exit(GPid pid, gint status, gpointer user_data);
+
+static GBusType s_default_gui_bus_type = G_BUS_TYPE_SYSTEM;
+
+void multiwifi_window_set_default_bus_type(GBusType bus_type)
+{
+    s_default_gui_bus_type = bus_type;
+}
 
 static void multiwifi_window_apply_css(void)
 {
@@ -798,8 +809,10 @@ static void update_control_buttons_state(MultiWifiWindow *self)
             gtk_label_set_text(GTK_LABEL(self->daemon_status_lbl), "○ Standalone");
         }
 
-        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-            "<span size='small' color='#f38ba8'>⚠ Daemon offline • Routing controls disabled</span>");
+        if (!self->daemon_action_pending) {
+            gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+                "<span size='small' color='#f38ba8'>⚠ Daemon offline • Routing controls disabled</span>");
+        }
         gtk_widget_set_sensitive(self->lb_switch, FALSE);
         gtk_widget_set_sensitive(self->bonding_switch, FALSE);
 
@@ -847,71 +860,46 @@ static void stop_daemon_via_pkexec(MultiWifiWindow *self)
     update_control_buttons_state(self);
 }
 
-static void on_daemon_systemd_stop_done(GObject *source, GAsyncResult *res, gpointer user_data)
+static void on_spawned_daemon_exit(GPid pid, gint status, gpointer user_data)
 {
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
-    GError *error = NULL;
-    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    g_spawn_close_pid(pid);
+    if (self->spawned_daemon_pid == pid) {
+        self->spawned_daemon_pid = 0;
+    }
+    self->daemon_action_pending = FALSE;
 
-    if (reply != NULL) {
-        g_variant_unref(reply);
-        self->daemon_action_pending = FALSE;
-    } else {
-        if (error != NULL && (strstr(error->message, "NoSuchUnit") != NULL ||
-                              strstr(error->message, "not loaded") != NULL)) {
-            g_clear_error(&error);
-            stop_daemon_via_pkexec(self);
-            return;
+    if (!self->daemon_connected) {
+        gchar *err_msg = NULL;
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            err_msg = g_strdup_printf(
+                "<span size='small' color='#f38ba8'>Daemon exited (code %d). For system daemon run: sudo cmake --install build</span>",
+                WEXITSTATUS(status)
+            );
+        } else {
+            err_msg = g_strdup(
+                "<span size='small' color='#f38ba8'>Authorization cancelled or service not installed. Run: sudo cmake --install build</span>"
+            );
         }
-
-        self->daemon_action_pending = FALSE;
-        g_warning("StopUnit failed: %s", error ? error->message : "Unknown error");
-        g_clear_error(&error);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), err_msg);
+        g_free(err_msg);
     }
 
     update_control_buttons_state(self);
 }
 
-static void on_daemon_systemd_start_done(GObject *source, GAsyncResult *res, gpointer user_data)
-{
-    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
-    GError *error = NULL;
-    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
-
-    if (reply != NULL) {
-        g_variant_unref(reply);
-        self->daemon_action_pending = FALSE;
-        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-            "<span size='small' color='#89b4fa'>Authenticating &amp; starting daemon...</span>");
-    } else {
-        if (error != NULL && (strstr(error->message, "NoSuchUnit") != NULL ||
-                              strstr(error->message, "not loaded") != NULL)) {
-            g_clear_error(&error);
-            start_daemon_via_pkexec(self);
-            return;
-        }
-
-        self->daemon_action_pending = FALSE;
-        gchar *escaped = g_markup_escape_text(error ? error->message : "Authentication cancelled", -1);
-        gchar *err_msg = g_strdup_printf(
-            "<span size='small' color='#f38ba8'>Failed to start: %s</span>", escaped
-        );
-        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), err_msg);
-        g_free(err_msg);
-        g_free(escaped);
-        g_clear_error(&error);
-        update_control_buttons_state(self);
-    }
-}
-
-static void start_daemon_via_pkexec(MultiWifiWindow *self)
+static void start_daemon_via_session(MultiWifiWindow *self)
 {
     gchar *daemon_path = find_daemon_executable();
-    const gchar *argv[] = { "pkexec", daemon_path, NULL };
+    const gchar *argv[] = { daemon_path, "--session", "--no-polkit", NULL };
     GError *spawn_err = NULL;
 
     gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-        "<span size='small' color='#89b4fa'>Prompting administrator authorization (Polkit)...</span>");
+        "<span size='small' color='#89b4fa'>Starting local test daemon on session bus...</span>");
+
+    self->daemon_action_pending = TRUE;
+    gtk_button_set_label(GTK_BUTTON(self->daemon_toggle_btn), "Starting...");
+    gtk_widget_set_sensitive(self->daemon_toggle_btn, FALSE);
 
     gboolean ok = g_spawn_async(
         NULL,
@@ -925,9 +913,51 @@ static void start_daemon_via_pkexec(MultiWifiWindow *self)
     );
     g_free(daemon_path);
 
-    self->daemon_action_pending = FALSE;
+    if (ok) {
+        g_child_watch_add(self->spawned_daemon_pid, on_spawned_daemon_exit, self);
+    } else {
+        self->daemon_action_pending = FALSE;
+        gchar *escaped = g_markup_escape_text(spawn_err ? spawn_err->message : "Failed to spawn daemon", -1);
+        gchar *err_msg = g_strdup_printf(
+            "<span size='small' color='#f38ba8'>Failed to start: %s</span>", escaped
+        );
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), err_msg);
+        g_free(err_msg);
+        g_free(escaped);
+        g_clear_error(&spawn_err);
+        update_control_buttons_state(self);
+    }
+}
 
-    if (!ok) {
+static void start_daemon_via_pkexec(MultiWifiWindow *self)
+{
+    gchar *daemon_path = find_daemon_executable();
+    const gchar *argv[] = { "pkexec", daemon_path, NULL };
+    GError *spawn_err = NULL;
+
+    gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+        "<span size='small' color='#89b4fa'>Prompting administrator authorization (Polkit)...</span>");
+
+    self->daemon_action_pending = TRUE;
+    gtk_button_set_label(GTK_BUTTON(self->daemon_toggle_btn), "Starting...");
+    gtk_widget_set_sensitive(self->daemon_toggle_btn, FALSE);
+
+    gboolean ok = g_spawn_async(
+        NULL,
+        (gchar **)argv,
+        NULL,
+        G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD,
+        NULL,
+        NULL,
+        &self->spawned_daemon_pid,
+        &spawn_err
+    );
+    g_free(daemon_path);
+
+    if (ok) {
+        g_child_watch_add(self->spawned_daemon_pid, on_spawned_daemon_exit, self);
+    } else {
+        self->daemon_action_pending = FALSE;
         gchar *escaped = g_markup_escape_text(spawn_err ? spawn_err->message : "Authorization failed", -1);
         gchar *err_msg = g_strdup_printf(
             "<span size='small' color='#f38ba8'>Polkit failed: %s</span>", escaped
@@ -936,9 +966,44 @@ static void start_daemon_via_pkexec(MultiWifiWindow *self)
         g_free(err_msg);
         g_free(escaped);
         g_clear_error(&spawn_err);
+        update_control_buttons_state(self);
     }
+}
 
-    update_control_buttons_state(self);
+static void on_daemon_systemd_stop_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        self->daemon_action_pending = FALSE;
+        update_control_buttons_state(self);
+    } else {
+        g_debug("systemd StopUnit failed (%s), attempting pkexec fallback", error ? error->message : "unknown");
+        g_clear_error(&error);
+        stop_daemon_via_pkexec(self);
+    }
+}
+
+static void on_daemon_systemd_start_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        self->daemon_action_pending = FALSE;
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#89b4fa'>Authenticating &amp; starting daemon...</span>");
+        update_control_buttons_state(self);
+    } else {
+        g_debug("systemd StartUnit failed (%s), attempting pkexec fallback", error ? error->message : "unknown");
+        g_clear_error(&error);
+        start_daemon_via_pkexec(self);
+    }
 }
 
 static void on_daemon_toggle_clicked(GtkButton *btn, gpointer user_data)
@@ -958,6 +1023,12 @@ static void on_daemon_toggle_clicked(GtkButton *btn, gpointer user_data)
             kill(self->spawned_daemon_pid, SIGTERM);
             g_spawn_close_pid(self->spawned_daemon_pid);
             self->spawned_daemon_pid = 0;
+        }
+
+        if (self->bus_type == G_BUS_TYPE_SESSION) {
+            self->daemon_action_pending = FALSE;
+            update_control_buttons_state(self);
+            return;
         }
 
         if (self->system_bus != NULL) {
@@ -980,6 +1051,11 @@ static void on_daemon_toggle_clicked(GtkButton *btn, gpointer user_data)
             update_control_buttons_state(self);
         }
     } else {
+        if (self->bus_type == G_BUS_TYPE_SESSION) {
+            start_daemon_via_session(self);
+            return;
+        }
+
         self->daemon_action_pending = TRUE;
         gtk_button_set_label(GTK_BUTTON(self->daemon_toggle_btn), "Starting...");
         gtk_widget_set_sensitive(self->daemon_toggle_btn, FALSE);
@@ -1328,9 +1404,10 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     g_signal_connect(diag_btn, "clicked", G_CALLBACK(on_diagnostics_clicked), self);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), diag_btn);
 
-    /* Initialize System Bus Connection early for StartUnit/StopUnit */
+    /* Initialize D-Bus Connection (System or Session bus) */
+    self->bus_type = s_default_gui_bus_type;
     GError *bus_err = NULL;
-    self->system_bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &bus_err);
+    self->system_bus = g_bus_get_sync(self->bus_type, NULL, &bus_err);
     if (self->system_bus == NULL) {
         g_clear_error(&bus_err);
     }
@@ -1341,7 +1418,7 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     self->spawned_daemon_pid = 0;
 
     self->bus_watcher_id = g_bus_watch_name(
-        G_BUS_TYPE_SYSTEM,
+        self->bus_type,
         MULTIWIFI_DBUS_NAME,
         G_BUS_NAME_WATCHER_FLAGS_NONE,
         on_daemon_name_appeared,
