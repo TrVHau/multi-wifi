@@ -146,6 +146,22 @@ static void test_desktop_file_safety(void)
     g_free(desktop);
 }
 
+static void test_style_css_integrity(void)
+{
+    gchar *css = read_repo_file("data/style.css");
+    g_assert_nonnull(css);
+    g_assert_cmpuint(strlen(css), >, 500);
+
+    /* Verify essential UI classes for modern card styling */
+    g_assert_nonnull(strstr(css, ".modern-card"));
+    g_assert_nonnull(strstr(css, ".hero-card"));
+    g_assert_nonnull(strstr(css, ".badge"));
+    g_assert_nonnull(strstr(css, "button.btn-primary"));
+    g_assert_nonnull(strstr(css, "button.btn-secondary"));
+
+    g_free(css);
+}
+
 /* 3. Arch Linux PKGBUILD and Install Scripts */
 
 static void test_arch_pkgbuild_and_install_integrity(void)
@@ -310,6 +326,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/packaging/polkit_action_safety", test_polkit_action_safety);
     g_test_add_func("/packaging/systemd_unit_safety", test_systemd_unit_safety);
     g_test_add_func("/packaging/desktop_file_safety", test_desktop_file_safety);
+    g_test_add_func("/packaging/style_css_integrity", test_style_css_integrity);
     g_test_add_func("/packaging/arch_pkgbuild_and_install", test_arch_pkgbuild_and_install_integrity);
     g_test_add_func("/packaging/debian_packaging_integrity", test_debian_packaging_integrity);
     g_test_add_func("/packaging/rpm_spec_integrity", test_rpm_spec_integrity);

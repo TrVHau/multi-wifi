@@ -98,6 +98,9 @@ install(TARGETS multiwifi-gui multiwifi-daemon
 install(FILES data/io.github.multiwifi.MultiWiFi.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
+install(FILES data/style.css
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/multiwifi
+)
 install(FILES data/io.github.multiwifi.Daemon1.xml
     DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/interfaces
 )

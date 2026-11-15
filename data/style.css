@@ -1,0 +1,201 @@
+/* MultiWiFi Modern Dark Desktop Theme
+ * Styled for GTK4 with responsive card layouts and modern typography
+ */
+
+window, .main-window {
+  background-color: #16171f;
+  color: #cdd6f4;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Ubuntu", "Cantarell", sans-serif;
+}
+
+headerbar {
+  background-color: #1e1e2e;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #cdd6f4;
+  padding: 6px 12px;
+}
+
+headerbar .title {
+  font-weight: 700;
+  font-size: 14px;
+  color: #cdd6f4;
+}
+
+headerbar .subtitle {
+  font-size: 11px;
+  color: #89b4fa;
+}
+
+/* Cards & Surfaces */
+.modern-card {
+  background-color: #1e1e2e;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 16px 20px;
+  margin-bottom: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+}
+
+.hero-card {
+  background: linear-gradient(145deg, #1e1e2e 0%, #26273b 100%);
+  border: 1px solid rgba(137, 180, 250, 0.22);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
+.subtle-card {
+  background-color: #1a1b26;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 14px 18px;
+}
+
+.metrics-card {
+  background-color: rgba(17, 17, 27, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+/* Section Typography */
+.section-header {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  color: #89b4fa;
+  text-transform: uppercase;
+}
+
+/* Status Badges */
+.badge {
+  border-radius: 9999px;
+  padding: 3px 12px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.badge-online {
+  background-color: rgba(166, 227, 161, 0.16);
+  color: #a6e3a1;
+  border: 1px solid rgba(166, 227, 161, 0.35);
+}
+
+.badge-degraded {
+  background-color: rgba(249, 226, 175, 0.16);
+  color: #f9e2af;
+  border: 1px solid rgba(249, 226, 175, 0.35);
+}
+
+.badge-danger {
+  background-color: rgba(243, 139, 168, 0.16);
+  color: #f38ba8;
+  border: 1px solid rgba(243, 139, 168, 0.35);
+}
+
+.badge-active {
+  background-color: rgba(137, 180, 250, 0.18);
+  color: #89b4fa;
+  border: 1px solid rgba(137, 180, 250, 0.4);
+}
+
+.badge-offline {
+  background-color: rgba(108, 112, 134, 0.16);
+  color: #a6adc8;
+  border: 1px solid rgba(108, 112, 134, 0.28);
+}
+
+.badge-hw {
+  background-color: rgba(148, 226, 213, 0.14);
+  color: #94e2d5;
+  border: 1px solid rgba(148, 226, 213, 0.32);
+}
+
+.badge-saved {
+  background-color: rgba(203, 166, 247, 0.16);
+  color: #cba6f7;
+  border: 1px solid rgba(203, 166, 247, 0.35);
+}
+
+/* Modern Buttons */
+button.btn-primary {
+  background: linear-gradient(135deg, #89b4fa 0%, #3584e4 100%);
+  color: #11111b;
+  font-weight: 700;
+  border-radius: 9px;
+  border: none;
+  padding: 8px 18px;
+}
+button.btn-primary:hover {
+  background: linear-gradient(135deg, #b4befe 0%, #4a90e2 100%);
+}
+
+button.btn-secondary {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #cdd6f4;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-weight: 600;
+  padding: 8px 16px;
+}
+button.btn-secondary:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+button.btn-stop {
+  background-color: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+  border-radius: 9px;
+  border: 1px solid rgba(243, 139, 168, 0.35);
+  font-weight: 600;
+  padding: 8px 16px;
+}
+button.btn-stop:hover {
+  background-color: rgba(243, 139, 168, 0.25);
+}
+
+/* Lists and Input Entries */
+listview, list {
+  background-color: #181825;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+row {
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin: 3px 6px;
+}
+row:selected {
+  background-color: rgba(137, 180, 250, 0.25);
+  color: #ffffff;
+}
+row:hover:not(:selected) {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+entry, passwordentry {
+  background-color: #181825;
+  color: #cdd6f4;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  padding: 8px 14px;
+}
+entry:focus, passwordentry:focus {
+  border-color: #89b4fa;
+}
+
+/* Scrollbar */
+scrollbar {
+  background: transparent;
+}
+scrollbar slider {
+  background-color: rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  min-width: 6px;
+  min-height: 6px;
+}
+scrollbar slider:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
