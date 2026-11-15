@@ -119,12 +119,10 @@ MultiWifiRoutingManager *multiwifi_routing_manager_new(const gchar *journal_dir)
     return mgr;
 }
 
-static int get_interface_rp_filter(const gchar *ifname)
+static int get_rp_filter(const gchar *ifname)
 {
-    if (ifname == NULL || *ifname == '\0') {
-        return -1;
-    }
-    gchar *path = g_strdup_printf("/proc/sys/net/ipv4/conf/%s/rp_filter", ifname);
+    gchar *path = (ifname && *ifname) ? g_strdup_printf("/proc/sys/net/ipv4/conf/%s/rp_filter", ifname)
+                                      : g_strdup("/proc/sys/net/ipv4/conf/all/rp_filter");
     gchar *content = NULL;
     int val = -1;
     if (g_file_get_contents(path, &content, NULL, NULL)) {
@@ -135,12 +133,10 @@ static int get_interface_rp_filter(const gchar *ifname)
     return val;
 }
 
-static void set_interface_rp_filter(const gchar *ifname, int val)
+static void set_rp_filter(const gchar *ifname, int val)
 {
-    if (ifname == NULL || *ifname == '\0') {
-        return;
-    }
-    gchar *path = g_strdup_printf("/proc/sys/net/ipv4/conf/%s/rp_filter", ifname);
+    gchar *path = (ifname && *ifname) ? g_strdup_printf("/proc/sys/net/ipv4/conf/%s/rp_filter", ifname)
+                                      : g_strdup("/proc/sys/net/ipv4/conf/all/rp_filter");
     gchar *content = g_strdup_printf("%d\n", val);
     g_file_set_contents(path, content, -1, NULL);
     g_free(content);
@@ -366,8 +362,11 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
         multiwifi_route_journal_save_to_file(journal, journal_path, NULL);
 
         /* 4. Configure Loose Reverse Path Filtering (rp_filter = 2) for multi-path compatibility */
-        if (get_interface_rp_filter(u->ifname) == 1) {
-            set_interface_rp_filter(u->ifname, 2);
+        if (get_rp_filter(u->ifname) == 1) {
+            set_rp_filter(u->ifname, 2);
+        }
+        if (get_rp_filter(NULL) == 1) {
+            set_rp_filter(NULL, 2);
         }
     }
 
@@ -512,8 +511,8 @@ gboolean multiwifi_routing_manager_teardown(MultiWifiRoutingManager *self,
                 multiwifi_netlink_del_rule(nl_fd, u->table_id, u->src_rule_pref, 0, 0, u->ipv4_address, NULL);
             }
             /* Restore Strict rp_filter if previously adapted */
-            if (get_interface_rp_filter(u->ifname) == 2) {
-                set_interface_rp_filter(u->ifname, 1);
+            if (get_rp_filter(u->ifname) == 2) {
+                set_rp_filter(u->ifname, 1);
             }
         }
         multiwifi_netlink_close(nl_fd);

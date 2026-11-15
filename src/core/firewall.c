@@ -148,7 +148,7 @@ gboolean multiwifi_firewall_apply(MultiWifiFirewall *self,
         "table ip " MULTIWIFI_NFT_TABLE_NAME " {\n"
         "    chain postrouting {\n"
         "        type nat hook postrouting priority 100; policy accept;\n"
-        "        oif != \"lo\" meta mark & 0xff00 == 0 meta mark != 0 masquerade\n"
+        "        oif != \"lo\" meta mark != 0 masquerade\n"
         "    }\n"
         "}\n";
     struct nft_ctx *nft_nat = nft_ctx_new(NFT_CTX_DEFAULT);
