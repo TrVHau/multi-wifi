@@ -209,15 +209,19 @@ ctest --test-dir build --output-on-failure
 
 ## Quick Start
 
-### 1. One-Click Installation & Removal
-You can easily install or remove MultiWiFi using the automated scripts:
+### 1. One-Click Installation & Management
+You can easily manage the entire MultiWiFi lifecycle using the unified `setup.sh` script:
 
 ```bash
 # Automated system installation (builds, installs systemd service, registers D-Bus & Polkit)
-sudo ./install.sh
+sudo ./setup.sh install   # Or simply: sudo ./setup.sh
 
 # Complete and clean uninstallation (removes all files and disables service)
-sudo ./uninstall.sh
+sudo ./setup.sh uninstall
+
+# Check system daemon status or restart
+sudo ./setup.sh status
+sudo ./setup.sh restart
 ```
 
 ### 2. Launch Desktop GUI
