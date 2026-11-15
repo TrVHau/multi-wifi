@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# MultiWiFi - Unified System Setup & Management Script
+# MultiWiFi - Unified Interactive Setup & Management Script
 # ==============================================================================
 
 set -e
@@ -19,27 +19,27 @@ cd "$PROJECT_DIR"
 show_help() {
     echo -e "${BLUE}${BOLD}MultiWiFi - Trình quản lý cài đặt & gỡ bỏ${NC}"
     echo ""
-    echo -e "Cách sử dụng: ${BOLD}sudo ./setup.sh [lựa chọn]${NC}"
-    echo ""
-    echo -e "Các lệnh khả dụng:"
-    echo -e "  ${GREEN}install${NC}    (hoặc không tham số) : Biên dịch và cài đặt MultiWiFi vào hệ thống"
-    echo -e "  ${RED}uninstall${NC}                       : Dừng dịch vụ và gỡ bỏ hoàn toàn MultiWiFi"
-    echo -e "  ${CYAN}status${NC}                          : Xem trạng thái hoạt động của daemon"
-    echo -e "  ${YELLOW}restart${NC}                         : Khởi động lại daemon hệ thống"
-    echo -e "  ${BOLD}help${NC}                            : Hiển thị hướng dẫn này"
+    echo -e "Cách sử dụng:"
+    echo -e "  ${BOLD}./setup.sh${NC}                    : Mở Menu tương tác để xem và chọn thao tác"
+    echo -e "  ${BOLD}sudo ./setup.sh install${NC}      : Cài đặt MultiWiFi vào hệ thống"
+    echo -e "  ${BOLD}sudo ./setup.sh uninstall${NC}    : Gỡ bỏ MultiWiFi sạch sẽ khỏi hệ thống"
+    echo -e "  ${BOLD}./setup.sh status${NC}            : Xem trạng thái hoạt động của daemon"
+    echo -e "  ${BOLD}sudo ./setup.sh restart${NC}      : Khởi động lại daemon hệ thống"
+    echo -e "  ${BOLD}./setup.sh help${NC}               : Hiển thị bảng hướng dẫn này"
     echo ""
 }
 
 check_root() {
+    local cmd="${1:-}"
     if [ "$(id -u)" -ne 0 ]; then
-        echo -e "${YELLOW}Yêu cầu quyền quản trị (root/sudo) để thao tác với dịch vụ hệ thống.${NC}"
+        echo -e "${YELLOW}Yêu cầu quyền quản trị (root/sudo) để thực hiện thao tác này.${NC}"
         echo -e "Đang chuyển sang thực thi với sudo..."
-        exec sudo "$0" "$@"
+        exec sudo "$0" "$cmd"
     fi
 }
 
 do_install() {
-    check_root "$@"
+    check_root "install"
     echo -e "${BLUE}${BOLD}==> Bắt đầu cài đặt MultiWiFi vào hệ thống...${NC}"
 
     echo -e "${BLUE}1/4. Kiểm tra và biên dịch mã nguồn (/usr)...${NC}"
@@ -68,14 +68,14 @@ do_install() {
     echo -e "${GREEN}${BOLD}=================================================================${NC}"
     echo -e "${GREEN}${BOLD}✔ CÀI ĐẶT MULTIWIFI HOÀN TẤT THÀNH CÔNG!${NC}"
     echo -e "${GREEN}${BOLD}=================================================================${NC}"
-    echo -e "• Daemon chạy ngầm:  ${GREEN}Active (systemd)${NC}"
+    echo -e "• Daemon chạy ngầm:   ${GREEN}Active (systemd)${NC}"
     echo -e "• Khởi chạy giao diện: Gõ lệnh ${BOLD}multiwifi-gui${NC} hoặc mở từ menu ứng dụng"
-    echo -e "• Để gỡ cài đặt:       Chạy lệnh ${BOLD}sudo ./setup.sh uninstall${NC}"
+    echo -e "• Để gỡ cài đặt:        Chạy lệnh ${BOLD}sudo ./setup.sh uninstall${NC}"
     echo ""
 }
 
 do_uninstall() {
-    check_root "$@"
+    check_root "uninstall"
     echo -e "${RED}${BOLD}==> Bắt đầu gỡ cài đặt MultiWiFi khỏi hệ thống...${NC}"
 
     echo -e "${BLUE}1/3. Dừng và vô hiệu hóa dịch vụ multiwifi-daemon...${NC}"
@@ -134,7 +134,7 @@ do_status() {
 }
 
 do_restart() {
-    check_root "$@"
+    check_root "restart"
     echo -e "${BLUE}Đang khởi động lại multiwifi-daemon...${NC}"
     if command -v systemctl >/dev/null 2>&1; then
         systemctl restart multiwifi-daemon
@@ -143,21 +143,68 @@ do_restart() {
     fi
 }
 
+show_interactive_menu() {
+    echo ""
+    echo -e "${CYAN}${BOLD}=================================================================${NC}"
+    echo -e "${BLUE}${BOLD}            MultiWiFi - Trình Quản Lý Cài Đặt & Dịch Vụ          ${NC}"
+    echo -e "${CYAN}${BOLD}=================================================================${NC}"
+    echo ""
+    echo -e "  ${BOLD}1)${NC} ${GREEN}Cài đặt vào hệ thống${NC}    (Build, cài file vào /usr, bật Daemon)"
+    echo -e "  ${BOLD}2)${NC} ${RED}Gỡ cài đặt hoàn toàn${NC}    (Dừng service, xóa sạch mọi file)"
+    echo -e "  ${BOLD}3)${NC} ${CYAN}Kiểm tra trạng thái${NC}     (Xem trạng thái multiwifi-daemon)"
+    echo -e "  ${BOLD}4)${NC} ${YELLOW}Khởi động lại Daemon${NC}    (Restart systemd service)"
+    echo -e "  ${BOLD}5)${NC} Hướng dẫn sử dụng      (Help)"
+    echo -e "  ${BOLD}0)${NC} Thoát                  (Exit)"
+    echo ""
+    echo -e "${CYAN}-----------------------------------------------------------------${NC}"
+    read -rp "Nhập lựa chọn của bạn [0-5]: " choice
+    echo ""
+
+    case "$choice" in
+        1)
+            do_install
+            ;;
+        2)
+            do_uninstall
+            ;;
+        3)
+            do_status
+            ;;
+        4)
+            do_restart
+            ;;
+        5)
+            show_help
+            ;;
+        0|q|Q)
+            echo -e "${YELLOW}Đã thoát.${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Lựa chọn không hợp lệ: '$choice'. Vui lòng chọn số từ 0 đến 5.${NC}"
+            exit 1
+            ;;
+    esac
+}
+
 # Xử lý tham số đầu vào
 ACTION="${1:-}"
 
 case "$ACTION" in
-    install|"")
-        do_install "$@"
+    "")
+        show_interactive_menu
+        ;;
+    install)
+        do_install
         ;;
     uninstall|remove)
-        do_uninstall "$@"
+        do_uninstall
         ;;
     status)
         do_status
         ;;
     restart)
-        do_restart "$@"
+        do_restart
         ;;
     help|--help|-h)
         show_help
