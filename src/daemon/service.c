@@ -54,6 +54,8 @@ static const gchar s_introspection_xml[] =
     "      <arg name=\"operation_id\" type=\"s\" direction=\"in\"/>"
     "      <arg name=\"result\" type=\"a{sv}\" direction=\"out\"/>"
     "    </method>"
+    "    <method name=\"StopDaemon\">"
+    "    </method>"
     "    <signal name=\"DeviceChanged\">"
     "      <arg name=\"device\" type=\"a{sv}\"/>"
     "    </signal>"
@@ -196,6 +198,13 @@ static GVariant *path_to_variant_dict(const MultiWifiPathInfo *p)
     return g_variant_builder_end(&b);
 }
 
+static gboolean on_stop_daemon_idle(gpointer user_data)
+{
+    (void)user_data;
+    raise(SIGTERM);
+    return G_SOURCE_REMOVE;
+}
+
 static void handle_method_call(GDBusConnection *connection,
                                const gchar *sender,
                                const gchar *object_path,
@@ -327,13 +336,16 @@ static void handle_method_call(GDBusConnection *connection,
             g_ptr_array_unref(devs);
         }
 
-        if (plan->uplinks->len == 0) {
+        if (plan->uplinks->len < 2) {
+            guint count = plan->uplinks->len;
             multiwifi_route_plan_free(plan);
             multiwifi_op_manager_finish(self->op_manager, op_id, FALSE, NULL,
-                                        "No connected Wi-Fi interfaces with IPv4 default gateway");
+                                        "Load balancing requires at least 2 connected Wi-Fi interfaces with IPv4 default gateways");
+            g_autofree gchar *err_msg = g_strdup_printf(
+                "Cần tối thiểu 2 kết nối Wi-Fi hoạt động để thực hiện Cân bằng tải (hiện có %u)", count
+            );
             g_dbus_method_invocation_return_dbus_error(
-                invocation, MULTIWIFI_ERROR_NETWORK_FAILURE,
-                "No connected Wi-Fi interfaces with IPv4 default gateway found"
+                invocation, MULTIWIFI_ERROR_NETWORK_FAILURE, err_msg
             );
             g_free(op_id);
             return;
@@ -649,6 +661,20 @@ static void handle_method_call(GDBusConnection *connection,
         }
 
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(@a{sv})", dict));
+    } else if (g_strcmp0(method_name, "StopDaemon") == 0) {
+        GError *auth_err = NULL;
+        if (!check_polkit_auth(self, invocation, "io.github.multiwifi.modify", &auth_err)) {
+            g_dbus_method_invocation_return_dbus_error(
+                invocation, MULTIWIFI_ERROR_NOT_AUTHORIZED,
+                auth_err ? auth_err->message : "Permission denied"
+            );
+            g_clear_error(&auth_err);
+            return;
+        }
+
+        g_info("StopDaemon requested via D-Bus; scheduling clean termination");
+        g_dbus_method_invocation_return_value(invocation, NULL);
+        g_idle_add(on_stop_daemon_idle, NULL);
     } else {
         g_dbus_method_invocation_return_error(
             invocation, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD,

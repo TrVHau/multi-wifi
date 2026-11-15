@@ -779,8 +779,6 @@ static void update_control_buttons_state(MultiWifiWindow *self)
             gtk_label_set_text(GTK_LABEL(self->daemon_status_lbl), "● Daemon Active");
         }
 
-        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-            "<span size='small' color='#a6e3a1'>✔ Daemon active on System D-Bus</span>");
         gtk_widget_set_sensitive(self->lb_switch, !self->bonding_active);
         gtk_widget_set_sensitive(self->bonding_switch, !self->lb_active);
 
@@ -809,10 +807,6 @@ static void update_control_buttons_state(MultiWifiWindow *self)
             gtk_label_set_text(GTK_LABEL(self->daemon_status_lbl), "○ Standalone");
         }
 
-        if (!self->daemon_action_pending) {
-            gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
-                "<span size='small' color='#f38ba8'>⚠ Daemon offline • Run 'sudo ./build/multiwifi-daemon' to start</span>");
-        }
         gtk_widget_set_sensitive(self->lb_switch, FALSE);
         gtk_widget_set_sensitive(self->bonding_switch, FALSE);
 
@@ -987,6 +981,53 @@ static void on_daemon_systemd_stop_done(GObject *source, GAsyncResult *res, gpoi
     }
 }
 
+static gboolean on_daemon_stop_timeout(gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    if (self->daemon_action_pending) {
+        self->daemon_action_pending = FALSE;
+        update_control_buttons_state(self);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void on_daemon_stop_call_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#89b4fa'>Stopping MultiWiFi daemon...</span>");
+        g_timeout_add_seconds(4, on_daemon_stop_timeout, self);
+    } else {
+        g_debug("StopDaemon D-Bus call failed (%s), attempting systemd/pkexec fallback",
+                error ? error->message : "unknown");
+        g_clear_error(&error);
+
+        if (self->system_bus != NULL && self->bus_type == G_BUS_TYPE_SYSTEM) {
+            g_dbus_connection_call(
+                self->system_bus,
+                "org.freedesktop.systemd1",
+                "/org/freedesktop/systemd1",
+                "org.freedesktop.systemd1.Manager",
+                "StopUnit",
+                g_variant_new("(ss)", "multiwifi-daemon.service", "replace"),
+                G_VARIANT_TYPE("(o)"),
+                G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
+                15000,
+                NULL,
+                on_daemon_systemd_stop_done,
+                self
+            );
+        } else {
+            stop_daemon_via_pkexec(self);
+        }
+    }
+}
+
 static void on_daemon_systemd_start_done(GObject *source, GAsyncResult *res, gpointer user_data)
 {
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
@@ -1025,25 +1066,19 @@ static void on_daemon_toggle_clicked(GtkButton *btn, gpointer user_data)
             self->spawned_daemon_pid = 0;
         }
 
-        if (self->bus_type == G_BUS_TYPE_SESSION) {
-            self->daemon_action_pending = FALSE;
-            update_control_buttons_state(self);
-            return;
-        }
-
         if (self->system_bus != NULL) {
             g_dbus_connection_call(
                 self->system_bus,
-                "org.freedesktop.systemd1",
-                "/org/freedesktop/systemd1",
-                "org.freedesktop.systemd1.Manager",
-                "StopUnit",
-                g_variant_new("(ss)", "multiwifi-daemon.service", "replace"),
-                G_VARIANT_TYPE("(o)"),
-                G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
-                15000,
+                MULTIWIFI_DBUS_NAME,
+                MULTIWIFI_DBUS_PATH,
+                MULTIWIFI_DBUS_INTERFACE,
+                "StopDaemon",
                 NULL,
-                on_daemon_systemd_stop_done,
+                NULL,
+                G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
+                5000,
+                NULL,
+                on_daemon_stop_call_done,
                 self
             );
         } else {
@@ -1106,19 +1141,51 @@ static void on_status_query_done(GObject *source, GAsyncResult *res, gpointer us
     update_control_buttons_state(self);
 }
 
-static void on_lb_action_done(GObject *source, GAsyncResult *res, gpointer user_data)
+static void on_lb_start_done(GObject *source, GAsyncResult *res, gpointer user_data)
 {
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
     GError *error = NULL;
     GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
     if (reply != NULL) {
         g_variant_unref(reply);
-        self->lb_active = !self->lb_active;
+        self->lb_active = TRUE;
+        update_control_buttons_state(self);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#a6e3a1'>✔ Đã kích hoạt Cân bằng tải (Load Balancing)</span>");
     } else if (error != NULL) {
-        g_warning("Load balancing action failed: %s", error->message);
+        g_warning("Load balancing start failed: %s", error->message);
+        self->lb_active = FALSE;
+        update_control_buttons_state(self);
+        gchar *escaped = g_markup_escape_text(error->message, -1);
+        gchar *msg = g_strdup_printf("<span size='small' color='#f38ba8'>⚠ %s</span>", escaped);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), msg);
+        g_free(msg);
+        g_free(escaped);
         g_clear_error(&error);
     }
-    update_control_buttons_state(self);
+}
+
+static void on_lb_stop_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        self->lb_active = FALSE;
+        update_control_buttons_state(self);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#a6e3a1'>✔ Đã tắt Cân bằng tải</span>");
+    } else if (error != NULL) {
+        g_warning("Load balancing stop failed: %s", error->message);
+        update_control_buttons_state(self);
+        gchar *escaped = g_markup_escape_text(error->message, -1);
+        gchar *msg = g_strdup_printf("<span size='small' color='#f38ba8'>⚠ Lỗi: %s</span>", escaped);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), msg);
+        g_free(msg);
+        g_free(escaped);
+        g_clear_error(&error);
+    }
 }
 
 static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data)
@@ -1129,10 +1196,14 @@ static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer u
         return FALSE;
     }
     if (!self->daemon_connected || self->system_bus == NULL) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#f38ba8'>⚠ Daemon chưa chạy. Hãy bấm '🚀 Start Daemon' trước.</span>");
         return TRUE;
     }
 
     if (state && !self->lb_active) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#89b4fa'>Đang kích hoạt Cân bằng tải...</span>");
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
         g_dbus_connection_call(
@@ -1143,13 +1214,15 @@ static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer u
             "StartLoadBalancing",
             g_variant_new("(@a{sv})", g_variant_builder_end(&b)),
             G_VARIANT_TYPE("(s)"),
-            G_DBUS_CALL_FLAGS_NONE,
+            G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
             10000,
             NULL,
-            on_lb_action_done,
+            on_lb_start_done,
             self
         );
     } else if (!state && self->lb_active) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#89b4fa'>Đang tắt Cân bằng tải...</span>");
         g_dbus_connection_call(
             self->system_bus,
             MULTIWIFI_DBUS_NAME,
@@ -1158,29 +1231,61 @@ static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer u
             "StopLoadBalancing",
             NULL,
             G_VARIANT_TYPE("(s)"),
-            G_DBUS_CALL_FLAGS_NONE,
+            G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
             10000,
             NULL,
-            on_lb_action_done,
+            on_lb_stop_done,
             self
         );
     }
     return FALSE;
 }
 
-static void on_bonding_action_done(GObject *source, GAsyncResult *res, gpointer user_data)
+static void on_bonding_start_done(GObject *source, GAsyncResult *res, gpointer user_data)
 {
     MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
     GError *error = NULL;
     GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
     if (reply != NULL) {
         g_variant_unref(reply);
-        self->bonding_active = !self->bonding_active;
+        self->bonding_active = TRUE;
+        update_control_buttons_state(self);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#a6e3a1'>✔ Đã kích hoạt Ghép kênh Bonding</span>");
     } else if (error != NULL) {
-        g_warning("Bonding action failed: %s", error->message);
+        g_warning("Bonding start failed: %s", error->message);
+        self->bonding_active = FALSE;
+        update_control_buttons_state(self);
+        gchar *escaped = g_markup_escape_text(error->message, -1);
+        gchar *msg = g_strdup_printf("<span size='small' color='#f38ba8'>⚠ Ghép kênh: %s</span>", escaped);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), msg);
+        g_free(msg);
+        g_free(escaped);
         g_clear_error(&error);
     }
-    update_control_buttons_state(self);
+}
+
+static void on_bonding_stop_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        self->bonding_active = FALSE;
+        update_control_buttons_state(self);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#a6e3a1'>✔ Đã tắt Ghép kênh Bonding</span>");
+    } else if (error != NULL) {
+        g_warning("Bonding stop failed: %s", error->message);
+        update_control_buttons_state(self);
+        gchar *escaped = g_markup_escape_text(error->message, -1);
+        gchar *msg = g_strdup_printf("<span size='small' color='#f38ba8'>⚠ Lỗi: %s</span>", escaped);
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner), msg);
+        g_free(msg);
+        g_free(escaped);
+        g_clear_error(&error);
+    }
 }
 
 static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data)
@@ -1191,10 +1296,14 @@ static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpoin
         return FALSE;
     }
     if (!self->daemon_connected || self->system_bus == NULL) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#f38ba8'>⚠ Daemon chưa chạy. Hãy bấm '🚀 Start Daemon' trước.</span>");
         return TRUE;
     }
 
     if (state && !self->bonding_active) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#89b4fa'>Đang kết nối Ghép kênh (Bonding tunnel)...</span>");
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
         g_variant_builder_add(&b, "{sv}", "server_host", g_variant_new_string("127.0.0.1"));
@@ -1209,13 +1318,15 @@ static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpoin
             "StartBonding",
             g_variant_new("(@a{sv})", g_variant_builder_end(&b)),
             G_VARIANT_TYPE("(s)"),
-            G_DBUS_CALL_FLAGS_NONE,
+            G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
             10000,
             NULL,
-            on_bonding_action_done,
+            on_bonding_start_done,
             self
         );
     } else if (!state && self->bonding_active) {
+        gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+            "<span size='small' color='#89b4fa'>Đang ngắt kết nối Ghép kênh...</span>");
         g_dbus_connection_call(
             self->system_bus,
             MULTIWIFI_DBUS_NAME,
@@ -1224,10 +1335,10 @@ static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpoin
             "StopBonding",
             NULL,
             G_VARIANT_TYPE("(s)"),
-            G_DBUS_CALL_FLAGS_NONE,
+            G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
             10000,
             NULL,
-            on_bonding_action_done,
+            on_bonding_stop_done,
             self
         );
     }
@@ -1264,6 +1375,8 @@ static void on_daemon_name_appeared(GDBusConnection *connection,
     );
 
     update_control_buttons_state(self);
+    gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+        "<span size='small' color='#a6e3a1'>✔ Daemon active on System D-Bus</span>");
 }
 
 static void on_daemon_name_vanished(GDBusConnection *connection,
@@ -1278,6 +1391,8 @@ static void on_daemon_name_vanished(GDBusConnection *connection,
     self->bonding_active = FALSE;
     self->daemon_action_pending = FALSE;
     update_control_buttons_state(self);
+    gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+        "<span size='small' color='#f38ba8'>⚠ Daemon offline • Run 'sudo ./build/multiwifi-daemon' to start</span>");
 }
 
 static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data)
@@ -1537,6 +1652,8 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     self->lb_active = FALSE;
     self->bonding_active = FALSE;
     update_control_buttons_state(self);
+    gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
+        "<span size='small' color='#f38ba8'>⚠ Daemon offline • Run 'sudo ./build/multiwifi-daemon' to start</span>");
 
     /* 2. Wi-Fi Adapters Section */
     GtkWidget *dev_sec_lbl = gtk_label_new("WI-FI ADAPTERS");

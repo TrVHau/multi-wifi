@@ -599,6 +599,22 @@ static void test_daemon_polkit_denial(void)
     g_free(remote_err);
     g_clear_error(&error);
 
+    /* Mutating method StopDaemon also requires polkit */
+    reply = call_dbus_iterative(
+        conn,
+        "StopDaemon",
+        NULL,
+        NULL,
+        &error
+    );
+    g_assert_null(reply);
+    g_assert_nonnull(error);
+    g_assert_true(g_dbus_error_is_remote_error(error));
+    remote_err = g_dbus_error_get_remote_error(error);
+    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_NOT_AUTHORIZED);
+    g_free(remote_err);
+    g_clear_error(&error);
+
     g_object_unref(conn);
     multiwifi_daemon_service_stop(svc);
     g_object_unref(svc);
