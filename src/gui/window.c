@@ -505,6 +505,7 @@ static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data)
     gtk_widget_add_css_class(dlg->connect_btn, "btn-primary");
     gtk_widget_set_sensitive(dlg->connect_btn, FALSE);
     g_signal_connect(dlg->connect_btn, "clicked", G_CALLBACK(on_dialog_connect_clicked), dlg);
+    g_signal_connect(dlg->password_entry, "activate", G_CALLBACK(on_dialog_connect_clicked), dlg);
     gtk_box_append(GTK_BOX(btn_row), dlg->connect_btn);
 
     gtk_box_append(GTK_BOX(content_box), btn_row);

@@ -251,6 +251,9 @@ static void test_transaction_apply_verify_teardown(void)
     g_assert_no_error(error);
     g_assert_true(applied);
     g_assert_true(multiwifi_routing_manager_is_active(mgr));
+    g_assert_cmpuint(multiwifi_routing_manager_get_fwmark(mgr, "lo"), ==, 0x1001);
+    g_assert_cmpuint(multiwifi_routing_manager_get_fwmark(mgr, "nonexistent0"), ==, 0);
+    g_assert_cmpuint(multiwifi_routing_manager_get_fwmark(NULL, "lo"), ==, 0);
 
     MultiWifiOperation *op = multiwifi_op_manager_find(op_mgr, op_id);
     g_assert_nonnull(op);
@@ -277,6 +280,7 @@ static void test_transaction_apply_verify_teardown(void)
     g_assert_no_error(error);
     g_assert_true(torn_down);
     g_assert_false(multiwifi_routing_manager_is_active(mgr));
+    g_assert_cmpuint(multiwifi_routing_manager_get_fwmark(mgr, "lo"), ==, 0);
 
     /* Verify deleted from kernel */
     rule_ok = TRUE;

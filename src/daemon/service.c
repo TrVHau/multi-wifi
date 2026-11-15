@@ -751,23 +751,30 @@ static void on_paths_forward(MultiWifiPathMonitor *mon, gpointer user_data)
                     NULL
                 );
 
-                if (multiwifi_firewall_is_active(self->firewall) &&
-                    multiwifi_routing_manager_is_active(self->routing_mgr)) {
-                    multiwifi_scheduler_add_or_update(
-                        self->scheduler, p->ifname, p->ifname, 0, 0,
-                        p->is_eligible, p->rtt_ms, p->packet_loss_percent
-                    );
+                if (multiwifi_routing_manager_is_active(self->routing_mgr)) {
+                    uint32_t fwmark = multiwifi_routing_manager_get_fwmark(self->routing_mgr, p->ifname);
+                    if (fwmark > 0) {
+                        multiwifi_scheduler_add_or_update(
+                            self->scheduler, p->ifname, p->ifname, fwmark, 0,
+                            p->is_eligible, p->rtt_ms, p->packet_loss_percent
+                        );
+                    }
                 }
             }
 
-            if (multiwifi_firewall_is_active(self->firewall) &&
-                multiwifi_routing_manager_is_active(self->routing_mgr)) {
+            if (multiwifi_routing_manager_is_active(self->routing_mgr)) {
                 GArray *marks = NULL;
                 guint n_marks = multiwifi_scheduler_get_distribution(self->scheduler, &marks);
                 if (n_marks > 0 && marks != NULL) {
                     GError *fw_err = NULL;
                     multiwifi_firewall_apply(self->firewall, marks, &fw_err);
                     g_clear_error(&fw_err);
+                } else if (multiwifi_firewall_is_active(self->firewall)) {
+                    /* All paths down or ineligible: teardown firewall rules to prevent traffic blackholing */
+                    GError *fw_err = NULL;
+                    multiwifi_firewall_teardown(self->firewall, &fw_err);
+                    g_clear_error(&fw_err);
+                    g_warning("All load-balanced paths are down; suspended firewall mark distribution to prevent blackholing");
                 }
                 if (marks != NULL) {
                     g_array_unref(marks);
@@ -960,6 +967,17 @@ void multiwifi_daemon_service_stop(MultiWifiDaemonService *self)
 {
     if (self == NULL) {
         return;
+    }
+
+    if (self->firewall != NULL && multiwifi_firewall_is_active(self->firewall)) {
+        multiwifi_firewall_teardown(self->firewall, NULL);
+    }
+    if (self->routing_mgr != NULL && multiwifi_routing_manager_is_active(self->routing_mgr)) {
+        multiwifi_routing_manager_teardown(self->routing_mgr, "daemon-stop", NULL, NULL);
+    }
+    if (self->bonding_client != NULL &&
+        multiwifi_bonding_client_get_state(self->bonding_client) == MULTIWIFI_BONDING_STATE_CONNECTED) {
+        multiwifi_bonding_client_stop(self->bonding_client);
     }
 
     if (self->registration_id > 0 && self->connection != NULL) {

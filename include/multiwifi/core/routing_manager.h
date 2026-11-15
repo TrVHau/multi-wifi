@@ -146,6 +146,15 @@ gboolean multiwifi_routing_manager_recover(MultiWifiRoutingManager *self,
  */
 gboolean multiwifi_routing_manager_is_active(MultiWifiRoutingManager *self);
 
+/**
+ * multiwifi_routing_manager_get_fwmark:
+ * @self: Routing manager
+ * @ifname: Interface name to check
+ *
+ * Returns the fwmark assigned to @ifname in the active plan, or 0 if inactive or not found.
+ */
+uint32_t multiwifi_routing_manager_get_fwmark(MultiWifiRoutingManager *self, const gchar *ifname);
+
 G_END_DECLS
 
 #endif /* MULTIWIFI_ROUTING_MANAGER_H */

@@ -10,6 +10,7 @@ struct _MultiWifiRoutingManager {
     gchar *journal_dir;
     MultiWifiRoutePlan *active_plan;
     gboolean is_active;
+    gboolean rp_filter_all_modified;
     GMutex mutex;
 };
 
@@ -107,6 +108,7 @@ static void multiwifi_routing_manager_init(MultiWifiRoutingManager *self)
     self->journal_dir = g_build_filename(g_get_user_runtime_dir(), "multiwifi", "journals", NULL);
     self->active_plan = NULL;
     self->is_active = FALSE;
+    self->rp_filter_all_modified = FALSE;
 }
 
 MultiWifiRoutingManager *multiwifi_routing_manager_new(const gchar *journal_dir)
@@ -367,6 +369,7 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
         }
         if (get_rp_filter(NULL) == 1) {
             set_rp_filter(NULL, 2);
+            self->rp_filter_all_modified = TRUE;
         }
     }
 
@@ -515,6 +518,10 @@ gboolean multiwifi_routing_manager_teardown(MultiWifiRoutingManager *self,
                 set_rp_filter(u->ifname, 1);
             }
         }
+        if (self->rp_filter_all_modified) {
+            set_rp_filter(NULL, 1);
+            self->rp_filter_all_modified = FALSE;
+        }
         multiwifi_netlink_close(nl_fd);
     }
 
@@ -586,4 +593,25 @@ gboolean multiwifi_routing_manager_is_active(MultiWifiRoutingManager *self)
     gboolean active = self ? self->is_active : FALSE;
     g_mutex_unlock(&self->mutex);
     return active;
+}
+
+uint32_t multiwifi_routing_manager_get_fwmark(MultiWifiRoutingManager *self, const gchar *ifname)
+{
+    if (self == NULL || ifname == NULL) {
+        return 0;
+    }
+
+    g_mutex_lock(&self->mutex);
+    if (self->active_plan != NULL && self->is_active) {
+        for (guint i = 0; i < self->active_plan->uplinks->len; i++) {
+            MultiWifiUplinkRouteConfig *u = g_ptr_array_index(self->active_plan->uplinks, i);
+            if (g_strcmp0(u->ifname, ifname) == 0) {
+                uint32_t mark = u->fwmark;
+                g_mutex_unlock(&self->mutex);
+                return mark;
+            }
+        }
+    }
+    g_mutex_unlock(&self->mutex);
+    return 0;
 }

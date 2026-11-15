@@ -283,7 +283,6 @@ static gboolean default_socket_probe(const gchar *ifname,
                                      gdouble *out_rtt_ms,
                                      gpointer user_data)
 {
-    (void)ifname;
     (void)user_data;
 
     if (target_ip == NULL || *target_ip == '\0') {
@@ -294,6 +293,13 @@ static gboolean default_socket_probe(const gchar *ifname,
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         return FALSE;
+    }
+
+    /* Bind to specific device name if given */
+    if (ifname != NULL && *ifname != '\0') {
+#ifdef SO_BINDTODEVICE
+        (void)setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, (socklen_t)(strlen(ifname) + 1));
+#endif
     }
 
     /* Set socket non-blocking */
