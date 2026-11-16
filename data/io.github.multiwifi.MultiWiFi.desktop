@@ -8,8 +8,3 @@ Terminal=false
 Type=Application
 Categories=Network;Settings;GTK;
 StartupNotify=true
-Actions=LightMode;
-
-[Desktop Action LightMode]
-Name=MultiWiFi (Lightweight Mode)
-Exec=multiwifi-gui --light
