@@ -140,6 +140,14 @@ static gboolean check_polkit_auth(MultiWifiDaemonService *self,
     g_object_unref(subject);
 
     if (result == NULL) {
+        if (error != NULL && *error != NULL) {
+            if (strstr((*error)->message, "not registered") != NULL ||
+                !g_file_test("/usr/share/polkit-1/actions/io.github.multiwifi.policy", G_FILE_TEST_EXISTS)) {
+                g_clear_error(error);
+                g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED,
+                            "Chính sách Polkit chưa được cài đặt vào hệ thống. Vui lòng chạy 'sudo ./setup.sh' chọn 1 (Install)");
+            }
+        }
         return FALSE;
     }
 
@@ -147,8 +155,13 @@ static gboolean check_polkit_auth(MultiWifiDaemonService *self,
     g_object_unref(result);
 
     if (!authorized) {
-        g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED,
-                    "Not authorized by system policy for action '%s'", action_id);
+        if (!g_file_test("/usr/share/polkit-1/actions/io.github.multiwifi.policy", G_FILE_TEST_EXISTS)) {
+            g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED,
+                        "Chính sách Polkit chưa được cài đặt vào hệ thống. Vui lòng chạy 'sudo ./setup.sh' chọn 1 (Install)");
+        } else {
+            g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED,
+                        "Not authorized by system policy for action '%s'", action_id);
+        }
         return FALSE;
     }
 

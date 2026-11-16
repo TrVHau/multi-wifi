@@ -1,0 +1,9 @@
+// MultiWiFi PolicyKit rules
+// Grants permission to local active console sessions and administrative users
+polkit.addRule(function(action, subject) {
+    if (action.id == "io.github.multiwifi.modify") {
+        if (subject.local && subject.active) {
+            return polkit.Result.YES;
+        }
+    }
+});

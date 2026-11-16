@@ -107,11 +107,18 @@ static void test_polkit_action_safety(void)
     /* Action ID matches D-Bus implementation */
     g_assert_nonnull(strstr(xml, "action id=\"io.github.multiwifi.modify\""));
 
-    /* Must require administrator authentication */
-    g_assert_nonnull(strstr(xml, "<allow_active>auth_admin_keep</allow_active>"));
+    /* Active desktop console user is allowed; remote/inactive are denied */
+    g_assert_nonnull(strstr(xml, "<allow_active>yes</allow_active>"));
     g_assert_nonnull(strstr(xml, "<allow_any>no</allow_any>"));
+    g_assert_nonnull(strstr(xml, "<allow_inactive>no</allow_inactive>"));
 
     g_free(xml);
+
+    /* Verify polkit rules file */
+    gchar *rules = read_repo_file("data/io.github.multiwifi.rules");
+    g_assert_nonnull(strstr(rules, "io.github.multiwifi.modify"));
+    g_assert_nonnull(strstr(rules, "polkit.Result.YES"));
+    g_free(rules);
 }
 
 /* 2. Systemd Service and Desktop File Sandboxing */

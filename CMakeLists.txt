@@ -113,6 +113,9 @@ install(FILES data/io.github.multiwifi.Daemon.conf
 install(FILES data/io.github.multiwifi.policy
     DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions
 )
+install(FILES data/io.github.multiwifi.rules
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/rules.d
+)
 install(FILES data/multiwifi-daemon.service
     DESTINATION lib/systemd/system
 )

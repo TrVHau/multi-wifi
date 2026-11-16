@@ -100,6 +100,8 @@ do_uninstall() {
     rm -f /usr/share/dbus-1/system.d/io.github.multiwifi.Daemon.conf
     rm -f /etc/dbus-1/system.d/io.github.multiwifi.Daemon.conf
     rm -f /usr/share/polkit-1/actions/io.github.multiwifi.policy
+    rm -f /usr/share/polkit-1/rules.d/io.github.multiwifi.rules
+    rm -f /etc/polkit-1/rules.d/io.github.multiwifi.rules
     rm -f /usr/share/applications/io.github.multiwifi.MultiWiFi.desktop
     rm -f /usr/share/dbus-1/interfaces/io.github.multiwifi.Daemon1.xml
     rm -rf /usr/share/multiwifi
