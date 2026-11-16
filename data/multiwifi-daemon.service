@@ -14,6 +14,8 @@ ProtectHome=true
 ProtectKernelTunables=false
 ProtectKernelModules=false
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+RuntimeDirectory=multiwifi
+ReadWritePaths=/etc /run
 
 [Install]
 WantedBy=multi-user.target

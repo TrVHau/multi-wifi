@@ -256,7 +256,7 @@ static gchar *get_resolv_backup_path(void)
     if (override != NULL && *override != '\0') {
         return g_build_filename(override, "resolv.conf.bak", NULL);
     }
-    return g_strdup("/var/run/multiwifi/resolv.conf.bak");
+    return g_strdup("/run/multiwifi/resolv.conf.bak");
 }
 
 static gboolean is_valid_dns_ip(const gchar *ip)
