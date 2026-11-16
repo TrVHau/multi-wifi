@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <arpa/inet.h>
 
 /* Embedded CSS Theme Fallback */
 static const char CSS_FALLBACK_PART1[] =
@@ -84,12 +85,34 @@ typedef struct {
     GCancellable *cancellable;
 } WifiSelectDialog;
 
+typedef struct {
+    MultiWifiWindow *main_win;
+    GtkWidget *dialog_window;
+    GtkWidget *current_dns_lbl;
+    GtkWidget *status_lbl;
+    GtkWidget *spinner;
+
+    GtkWidget *radio_cloudflare;
+    GtkWidget *radio_google;
+    GtkWidget *radio_quad9;
+    GtkWidget *radio_adguard;
+    GtkWidget *radio_custom;
+
+    GtkWidget *custom_box;
+    GtkWidget *primary_entry;
+    GtkWidget *secondary_entry;
+
+    GtkWidget *apply_btn;
+    GtkWidget *reset_btn;
+} DnsConfigDialog;
+
 static void update_devices_ui(MultiWifiWindow *self);
 static void update_control_buttons_state(MultiWifiWindow *self);
 static gboolean on_lb_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data);
 static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpointer user_data);
 static void on_daemon_toggle_clicked(GtkButton *btn, gpointer user_data);
 static void on_about_clicked(GtkButton *btn, gpointer user_data);
+static void on_dns_clicked(GtkButton *btn, gpointer user_data);
 static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data);
 static void on_select_wifi_clicked(GtkButton *btn, gpointer user_data);
 static void on_inventory_devices_changed(MultiWifiInventory *inv, gpointer user_data);
@@ -1420,6 +1443,496 @@ static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data)
     }
 }
 
+static void dns_config_dialog_free(DnsConfigDialog *dlg)
+{
+    if (dlg == NULL) {
+        return;
+    }
+    g_free(dlg);
+}
+
+static void on_dns_radio_toggled(GtkCheckButton *btn, gpointer user_data)
+{
+    (void)btn;
+    DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
+    gboolean is_custom = gtk_check_button_get_active(GTK_CHECK_BUTTON(dlg->radio_custom));
+    gtk_widget_set_visible(dlg->custom_box, is_custom);
+}
+
+static void on_get_dns_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
+
+    if (reply != NULL) {
+        GVariantIter *iter = NULL;
+        gboolean is_custom = FALSE;
+        g_variant_get(reply, "(asb)", &iter, &is_custom);
+
+        GString *servers_str = g_string_new(NULL);
+        const gchar *s = NULL;
+        gboolean has_cf = FALSE;
+        gboolean has_google = FALSE;
+        gboolean has_quad9 = FALSE;
+        gboolean has_adguard = FALSE;
+        gchar *first_ip = NULL;
+        gchar *second_ip = NULL;
+
+        while (g_variant_iter_next(iter, "&s", &s)) {
+            if (servers_str->len > 0) {
+                g_string_append(servers_str, ", ");
+            }
+            g_string_append(servers_str, s);
+            if (g_strcmp0(s, "1.1.1.1") == 0 || g_strcmp0(s, "1.0.0.1") == 0) {
+                has_cf = TRUE;
+            } else if (g_strcmp0(s, "8.8.8.8") == 0 || g_strcmp0(s, "8.8.4.4") == 0) {
+                has_google = TRUE;
+            } else if (g_strcmp0(s, "9.9.9.9") == 0 || g_strcmp0(s, "149.112.112.112") == 0) {
+                has_quad9 = TRUE;
+            } else if (g_strcmp0(s, "94.140.14.14") == 0 || g_strcmp0(s, "94.140.15.15") == 0) {
+                has_adguard = TRUE;
+            }
+            if (first_ip == NULL) {
+                first_ip = g_strdup(s);
+            } else if (second_ip == NULL) {
+                second_ip = g_strdup(s);
+            }
+        }
+        g_variant_iter_free(iter);
+
+        gchar *markup = NULL;
+        if (servers_str->len > 0) {
+            markup = g_strdup_printf(
+                "Current DNS: <b>%s</b> %s",
+                servers_str->str,
+                is_custom ? "<span color='#89b4fa'>(Custom Override)</span>" : "<span color='#a6adc8'>(DHCP Default)</span>"
+            );
+        } else {
+            markup = g_strdup("Current DNS: <i>None detected (DHCP auto)</i>");
+        }
+        gtk_label_set_markup(GTK_LABEL(dlg->current_dns_lbl), markup);
+        g_free(markup);
+        g_string_free(servers_str, TRUE);
+
+        if (has_cf) {
+            gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->radio_cloudflare), TRUE);
+        } else if (has_google) {
+            gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->radio_google), TRUE);
+        } else if (has_quad9) {
+            gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->radio_quad9), TRUE);
+        } else if (has_adguard) {
+            gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->radio_adguard), TRUE);
+        } else if (is_custom && first_ip != NULL) {
+            gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->radio_custom), TRUE);
+            gtk_editable_set_text(GTK_EDITABLE(dlg->primary_entry), first_ip);
+            if (second_ip != NULL) {
+                gtk_editable_set_text(GTK_EDITABLE(dlg->secondary_entry), second_ip);
+            }
+        } else {
+            gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->radio_cloudflare), TRUE);
+        }
+
+        g_free(first_ip);
+        g_free(second_ip);
+        g_variant_unref(reply);
+    } else {
+        gtk_label_set_markup(GTK_LABEL(dlg->current_dns_lbl),
+            "<span color='#f38ba8'>Failed to query DNS from daemon</span>");
+        g_clear_error(&error);
+    }
+}
+
+static void on_set_dns_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
+    gtk_widget_set_sensitive(dlg->apply_btn, TRUE);
+    gtk_widget_set_sensitive(dlg->reset_btn, TRUE);
+
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+            "<span color='#a6e3a1'>✓ DNS settings applied successfully!</span>");
+
+        if (dlg->main_win->system_bus != NULL) {
+            gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+            g_dbus_connection_call(
+                dlg->main_win->system_bus,
+                MULTIWIFI_DBUS_NAME,
+                MULTIWIFI_DBUS_PATH,
+                MULTIWIFI_DBUS_INTERFACE,
+                "GetDNS",
+                NULL,
+                G_VARIANT_TYPE("(asb)"),
+                G_DBUS_CALL_FLAGS_NONE,
+                5000,
+                NULL,
+                on_get_dns_done,
+                dlg
+            );
+        }
+    } else {
+        gchar *escaped = g_markup_escape_text(error ? error->message : "Failed to set DNS", -1);
+        gchar *msg = g_strdup_printf("<span color='#f38ba8'>✗ %s</span>", escaped);
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl), msg);
+        g_free(msg);
+        g_free(escaped);
+        g_clear_error(&error);
+    }
+}
+
+static void on_reset_dns_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
+    gtk_widget_set_sensitive(dlg->apply_btn, TRUE);
+    gtk_widget_set_sensitive(dlg->reset_btn, TRUE);
+
+    if (reply != NULL) {
+        g_variant_unref(reply);
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+            "<span color='#a6e3a1'>✓ Restored original DHCP DNS configuration.</span>");
+
+        if (dlg->main_win->system_bus != NULL) {
+            gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+            g_dbus_connection_call(
+                dlg->main_win->system_bus,
+                MULTIWIFI_DBUS_NAME,
+                MULTIWIFI_DBUS_PATH,
+                MULTIWIFI_DBUS_INTERFACE,
+                "GetDNS",
+                NULL,
+                G_VARIANT_TYPE("(asb)"),
+                G_DBUS_CALL_FLAGS_NONE,
+                5000,
+                NULL,
+                on_get_dns_done,
+                dlg
+            );
+        }
+    } else {
+        gchar *escaped = g_markup_escape_text(error ? error->message : "Failed to reset DNS", -1);
+        gchar *msg = g_strdup_printf("<span color='#f38ba8'>✗ %s</span>", escaped);
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl), msg);
+        g_free(msg);
+        g_free(escaped);
+        g_clear_error(&error);
+    }
+}
+
+static void on_dns_apply_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
+    if (dlg->main_win->system_bus == NULL || !dlg->main_win->daemon_connected) {
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+            "<span color='#f38ba8'>MultiWiFi daemon is not connected</span>");
+        return;
+    }
+
+    GPtrArray *servers = g_ptr_array_new_with_free_func(g_free);
+
+    if (gtk_check_button_get_active(GTK_CHECK_BUTTON(dlg->radio_cloudflare))) {
+        g_ptr_array_add(servers, g_strdup("1.1.1.1"));
+        g_ptr_array_add(servers, g_strdup("1.0.0.1"));
+    } else if (gtk_check_button_get_active(GTK_CHECK_BUTTON(dlg->radio_google))) {
+        g_ptr_array_add(servers, g_strdup("8.8.8.8"));
+        g_ptr_array_add(servers, g_strdup("8.8.4.4"));
+    } else if (gtk_check_button_get_active(GTK_CHECK_BUTTON(dlg->radio_quad9))) {
+        g_ptr_array_add(servers, g_strdup("9.9.9.9"));
+        g_ptr_array_add(servers, g_strdup("149.112.112.112"));
+    } else if (gtk_check_button_get_active(GTK_CHECK_BUTTON(dlg->radio_adguard))) {
+        g_ptr_array_add(servers, g_strdup("94.140.14.14"));
+        g_ptr_array_add(servers, g_strdup("94.140.15.15"));
+    } else if (gtk_check_button_get_active(GTK_CHECK_BUTTON(dlg->radio_custom))) {
+        const gchar *p = gtk_editable_get_text(GTK_EDITABLE(dlg->primary_entry));
+        const gchar *s = gtk_editable_get_text(GTK_EDITABLE(dlg->secondary_entry));
+        gchar *ptrim = p ? g_strstrip(g_strdup(p)) : NULL;
+        gchar *strim = s ? g_strstrip(g_strdup(s)) : NULL;
+
+        struct in_addr a4;
+        struct in6_addr a6;
+
+        if (ptrim != NULL && *ptrim != '\0') {
+            if (inet_pton(AF_INET, ptrim, &a4) == 1 || inet_pton(AF_INET6, ptrim, &a6) == 1) {
+                g_ptr_array_add(servers, ptrim);
+            } else {
+                g_free(ptrim);
+                g_free(strim);
+                g_ptr_array_unref(servers);
+                gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+                    "<span color='#f38ba8'>Primary DNS IP address is invalid</span>");
+                return;
+            }
+        } else {
+            g_free(ptrim);
+        }
+
+        if (strim != NULL && *strim != '\0') {
+            if (inet_pton(AF_INET, strim, &a4) == 1 || inet_pton(AF_INET6, strim, &a6) == 1) {
+                g_ptr_array_add(servers, strim);
+            } else {
+                g_free(strim);
+                g_ptr_array_unref(servers);
+                gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+                    "<span color='#f38ba8'>Secondary DNS IP address is invalid</span>");
+                return;
+            }
+        } else {
+            g_free(strim);
+        }
+
+        if (servers->len == 0) {
+            g_ptr_array_unref(servers);
+            gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+                "<span color='#f38ba8'>Please enter at least one valid DNS IP address</span>");
+            return;
+        }
+    }
+
+    GVariantBuilder b;
+    g_variant_builder_init(&b, G_VARIANT_TYPE("as"));
+    for (guint i = 0; i < servers->len; i++) {
+        g_variant_builder_add(&b, "s", (const gchar *)g_ptr_array_index(servers, i));
+    }
+    g_ptr_array_unref(servers);
+
+    gtk_widget_set_sensitive(dlg->apply_btn, FALSE);
+    gtk_widget_set_sensitive(dlg->reset_btn, FALSE);
+    gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+    gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+        "<span color='#89b4fa'>Applying DNS configuration via daemon...</span>");
+
+    g_dbus_connection_call(
+        dlg->main_win->system_bus,
+        MULTIWIFI_DBUS_NAME,
+        MULTIWIFI_DBUS_PATH,
+        MULTIWIFI_DBUS_INTERFACE,
+        "SetDNS",
+        g_variant_new("(as)", &b),
+        G_VARIANT_TYPE("(s)"),
+        G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
+        15000,
+        NULL,
+        on_set_dns_done,
+        dlg
+    );
+}
+
+static void on_dns_reset_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
+    if (dlg->main_win->system_bus == NULL || !dlg->main_win->daemon_connected) {
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+            "<span color='#f38ba8'>MultiWiFi daemon is not connected</span>");
+        return;
+    }
+
+    gtk_widget_set_sensitive(dlg->apply_btn, FALSE);
+    gtk_widget_set_sensitive(dlg->reset_btn, FALSE);
+    gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+    gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+        "<span color='#89b4fa'>Restoring DHCP DNS configuration...</span>");
+
+    g_dbus_connection_call(
+        dlg->main_win->system_bus,
+        MULTIWIFI_DBUS_NAME,
+        MULTIWIFI_DBUS_PATH,
+        MULTIWIFI_DBUS_INTERFACE,
+        "ResetDNS",
+        NULL,
+        G_VARIANT_TYPE("(s)"),
+        G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
+        15000,
+        NULL,
+        on_reset_dns_done,
+        dlg
+    );
+}
+
+static void on_dns_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+
+    DnsConfigDialog *dlg = g_new0(DnsConfigDialog, 1);
+    dlg->main_win = self;
+
+    dlg->dialog_window = gtk_window_new();
+    gtk_widget_add_css_class(dlg->dialog_window, "main-window");
+    gtk_window_set_title(GTK_WINDOW(dlg->dialog_window), "DNS Configuration");
+    gtk_window_set_default_size(GTK_WINDOW(dlg->dialog_window), 520, 480);
+    gtk_window_set_transient_for(GTK_WINDOW(dlg->dialog_window), GTK_WINDOW(self));
+    gtk_window_set_modal(GTK_WINDOW(dlg->dialog_window), TRUE);
+
+    /* Header Bar */
+    GtkWidget *header = gtk_header_bar_new();
+    gtk_window_set_titlebar(GTK_WINDOW(dlg->dialog_window), header);
+
+    GtkWidget *title_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *title_lbl = gtk_label_new("DNS Configuration");
+    gtk_widget_add_css_class(title_lbl, "title");
+    gtk_box_append(GTK_BOX(title_box), title_lbl);
+    gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), title_box);
+
+    dlg->spinner = gtk_spinner_new();
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), dlg->spinner);
+
+    /* Main Container */
+    GtkWidget *content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+    gtk_widget_set_margin_top(content_box, 16);
+    gtk_widget_set_margin_bottom(content_box, 16);
+    gtk_widget_set_margin_start(content_box, 18);
+    gtk_widget_set_margin_end(content_box, 18);
+
+    /* Card 1: Current DNS Status */
+    GtkWidget *status_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_add_css_class(status_card, "action-row");
+    dlg->current_dns_lbl = gtk_label_new("Current DNS: Querying daemon...");
+    gtk_label_set_xalign(GTK_LABEL(dlg->current_dns_lbl), 0.0f);
+    gtk_box_append(GTK_BOX(status_card), dlg->current_dns_lbl);
+    gtk_box_append(GTK_BOX(content_box), status_card);
+
+    /* Card 2: Preset DNS Providers */
+    GtkWidget *presets_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_add_css_class(presets_card, "modern-card");
+
+    GtkWidget *card_title = gtk_label_new("SELECT DNS PROVIDER");
+    gtk_widget_add_css_class(card_title, "section-header");
+    gtk_label_set_xalign(GTK_LABEL(card_title), 0.0f);
+    gtk_box_append(GTK_BOX(presets_card), card_title);
+
+    GtkWidget *desc_lbl = gtk_label_new("Switch DNS to bypass ISP domain blocks and accelerate lookups across dual links:");
+    gtk_label_set_wrap(GTK_LABEL(desc_lbl), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(desc_lbl), 0.0f);
+    gtk_widget_add_css_class(desc_lbl, "metric-chip");
+    gtk_box_append(GTK_BOX(presets_card), desc_lbl);
+
+    dlg->radio_cloudflare = gtk_check_button_new_with_label("⚡ Cloudflare (1.1.1.1, 1.0.0.1) — Fastest, unblocks sites");
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(dlg->radio_cloudflare), TRUE);
+    gtk_box_append(GTK_BOX(presets_card), dlg->radio_cloudflare);
+
+    dlg->radio_google = gtk_check_button_new_with_label("🔍 Google Public DNS (8.8.8.8, 8.8.4.4) — High global reliability");
+    gtk_check_button_set_group(GTK_CHECK_BUTTON(dlg->radio_google), GTK_CHECK_BUTTON(dlg->radio_cloudflare));
+    gtk_box_append(GTK_BOX(presets_card), dlg->radio_google);
+
+    dlg->radio_quad9 = gtk_check_button_new_with_label("🛡️ Quad9 (9.9.9.9, 149.112.112.112) — Malware & phishing protection");
+    gtk_check_button_set_group(GTK_CHECK_BUTTON(dlg->radio_quad9), GTK_CHECK_BUTTON(dlg->radio_cloudflare));
+    gtk_box_append(GTK_BOX(presets_card), dlg->radio_quad9);
+
+    dlg->radio_adguard = gtk_check_button_new_with_label("🚫 AdGuard DNS (94.140.14.14, 94.140.15.15) — Ad & tracker blocking");
+    gtk_check_button_set_group(GTK_CHECK_BUTTON(dlg->radio_adguard), GTK_CHECK_BUTTON(dlg->radio_cloudflare));
+    gtk_box_append(GTK_BOX(presets_card), dlg->radio_adguard);
+
+    dlg->radio_custom = gtk_check_button_new_with_label("⚙️ Custom DNS Servers");
+    gtk_check_button_set_group(GTK_CHECK_BUTTON(dlg->radio_custom), GTK_CHECK_BUTTON(dlg->radio_cloudflare));
+    gtk_box_append(GTK_BOX(presets_card), dlg->radio_custom);
+
+    /* Custom DNS Inputs Box */
+    dlg->custom_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_visible(dlg->custom_box, FALSE);
+    gtk_widget_set_margin_start(dlg->custom_box, 24);
+    gtk_widget_set_margin_top(dlg->custom_box, 4);
+
+    GtkWidget *custom_row1 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *lbl_p = gtk_label_new("Primary DNS:");
+    gtk_widget_set_size_request(lbl_p, 110, -1);
+    gtk_label_set_xalign(GTK_LABEL(lbl_p), 0.0f);
+    dlg->primary_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(dlg->primary_entry), "e.g. 1.1.1.1 or 208.67.222.222");
+    gtk_widget_set_hexpand(dlg->primary_entry, TRUE);
+    gtk_box_append(GTK_BOX(custom_row1), lbl_p);
+    gtk_box_append(GTK_BOX(custom_row1), dlg->primary_entry);
+    gtk_box_append(GTK_BOX(dlg->custom_box), custom_row1);
+
+    GtkWidget *custom_row2 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *lbl_s = gtk_label_new("Secondary DNS:");
+    gtk_widget_set_size_request(lbl_s, 110, -1);
+    gtk_label_set_xalign(GTK_LABEL(lbl_s), 0.0f);
+    dlg->secondary_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(dlg->secondary_entry), "e.g. 1.0.0.1 or 208.67.220.220");
+    gtk_widget_set_hexpand(dlg->secondary_entry, TRUE);
+    gtk_box_append(GTK_BOX(custom_row2), lbl_s);
+    gtk_box_append(GTK_BOX(custom_row2), dlg->secondary_entry);
+    gtk_box_append(GTK_BOX(dlg->custom_box), custom_row2);
+
+    gtk_box_append(GTK_BOX(presets_card), dlg->custom_box);
+    gtk_box_append(GTK_BOX(content_box), presets_card);
+
+    g_signal_connect(dlg->radio_custom, "toggled", G_CALLBACK(on_dns_radio_toggled), dlg);
+    g_signal_connect(dlg->radio_cloudflare, "toggled", G_CALLBACK(on_dns_radio_toggled), dlg);
+    g_signal_connect(dlg->radio_google, "toggled", G_CALLBACK(on_dns_radio_toggled), dlg);
+    g_signal_connect(dlg->radio_quad9, "toggled", G_CALLBACK(on_dns_radio_toggled), dlg);
+    g_signal_connect(dlg->radio_adguard, "toggled", G_CALLBACK(on_dns_radio_toggled), dlg);
+
+    /* Status / Feedback label */
+    dlg->status_lbl = gtk_label_new(NULL);
+    gtk_label_set_wrap(GTK_LABEL(dlg->status_lbl), TRUE);
+    gtk_box_append(GTK_BOX(content_box), dlg->status_lbl);
+
+    /* Bottom Buttons */
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_set_margin_top(btn_row, 8);
+
+    dlg->reset_btn = gtk_button_new_with_label("Reset to DHCP");
+    gtk_widget_add_css_class(dlg->reset_btn, "btn-secondary");
+    gtk_widget_set_tooltip_text(dlg->reset_btn, "Remove custom DNS and revert to original DHCP DNS");
+    g_signal_connect(dlg->reset_btn, "clicked", G_CALLBACK(on_dns_reset_clicked), dlg);
+    gtk_box_append(GTK_BOX(btn_row), dlg->reset_btn);
+
+    GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(spacer, TRUE);
+    gtk_box_append(GTK_BOX(btn_row), spacer);
+
+    GtkWidget *close_btn = gtk_button_new_with_label("Close");
+    gtk_widget_add_css_class(close_btn, "btn-secondary");
+    g_signal_connect_swapped(close_btn, "clicked", G_CALLBACK(gtk_window_destroy), dlg->dialog_window);
+    gtk_box_append(GTK_BOX(btn_row), close_btn);
+
+    dlg->apply_btn = gtk_button_new_with_label("Apply DNS");
+    gtk_widget_add_css_class(dlg->apply_btn, "btn-primary");
+    g_signal_connect(dlg->apply_btn, "clicked", G_CALLBACK(on_dns_apply_clicked), dlg);
+    gtk_box_append(GTK_BOX(btn_row), dlg->apply_btn);
+
+    gtk_box_append(GTK_BOX(content_box), btn_row);
+    gtk_window_set_child(GTK_WINDOW(dlg->dialog_window), content_box);
+
+    g_signal_connect_swapped(dlg->dialog_window, "destroy", G_CALLBACK(dns_config_dialog_free), dlg);
+
+    /* Query current DNS status from daemon */
+    if (self->daemon_connected && self->system_bus != NULL) {
+        gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+        g_dbus_connection_call(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_PATH,
+            MULTIWIFI_DBUS_INTERFACE,
+            "GetDNS",
+            NULL,
+            G_VARIANT_TYPE("(asb)"),
+            G_DBUS_CALL_FLAGS_NONE,
+            5000,
+            NULL,
+            on_get_dns_done,
+            dlg
+        );
+    } else {
+        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
+            "<span color='#f9e2af'>⚠️ MultiWiFi daemon is not active. Start daemon to configure DNS.</span>");
+        gtk_widget_set_sensitive(dlg->apply_btn, FALSE);
+        gtk_widget_set_sensitive(dlg->reset_btn, FALSE);
+    }
+
+    gtk_window_present(GTK_WINDOW(dlg->dialog_window));
+}
+
 static void on_about_clicked(GtkButton *btn, gpointer user_data)
 {
     (void)btn;
@@ -1511,6 +2024,13 @@ static void multiwifi_window_init(MultiWifiWindow *self)
     gtk_widget_set_tooltip_text(about_btn, "About MultiWiFi");
     g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), self);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), about_btn);
+
+    /* Right: DNS Configuration button */
+    GtkWidget *dns_btn = gtk_button_new_with_label("🌐 DNS");
+    gtk_widget_add_css_class(dns_btn, "btn-secondary");
+    gtk_widget_set_tooltip_text(dns_btn, "Configure DNS servers (Cloudflare, Google, Quad9, AdGuard, Custom)");
+    g_signal_connect(dns_btn, "clicked", G_CALLBACK(on_dns_clicked), self);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), dns_btn);
 
     /* Right: Refresh button */
     GtkWidget *diag_btn = gtk_button_new_with_label("↻ Probe");

@@ -3,6 +3,7 @@
 #include "multiwifi/shared/dbus_defs.h"
 #include "multiwifi/version.h"
 #include <gio/gio.h>
+#include <glib/gstdio.h>
 
 static void test_operation_manager_lifecycle(void)
 {
@@ -392,6 +393,148 @@ static void test_daemon_dbus_ipc_roundtrip(void)
     g_free(remote_err);
     g_clear_error(&error);
 
+    /* 16. Test GetDNS initial */
+    reply = call_dbus_iterative(
+        conn,
+        "GetDNS",
+        NULL,
+        G_VARIANT_TYPE("(asb)"),
+        &error
+    );
+    g_assert_no_error(error);
+    g_assert_nonnull(reply);
+    GVariantIter *dns_iter = NULL;
+    gboolean is_custom = TRUE;
+    g_variant_get(reply, "(asb)", &dns_iter, &is_custom);
+    g_variant_iter_free(dns_iter);
+    g_variant_unref(reply);
+
+    /* Setup temp test dir for DNS files */
+    gchar *tmp_dir = g_dir_make_tmp("multiwifi_dns_test_XXXXXX", &error);
+    g_assert_no_error(error);
+    gchar *fake_resolv = g_build_filename(tmp_dir, "resolv.conf", NULL);
+    g_file_set_contents(fake_resolv, "nameserver 192.168.1.1\n", -1, NULL);
+
+    g_setenv("MULTIWIFI_DNS_CONF_DIR", tmp_dir, TRUE);
+    g_setenv("MULTIWIFI_RESOLV_CONF", fake_resolv, TRUE);
+
+    /* 17. Test SetDNS invalid IP */
+    GVariantBuilder bad_ip_b;
+    g_variant_builder_init(&bad_ip_b, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&bad_ip_b, "s", "invalid.not.an.ip");
+    reply = call_dbus_iterative(
+        conn,
+        "SetDNS",
+        g_variant_new("(@as)", g_variant_builder_end(&bad_ip_b)),
+        G_VARIANT_TYPE("(s)"),
+        &error
+    );
+    g_assert_null(reply);
+    g_assert_nonnull(error);
+    g_assert_true(g_dbus_error_is_remote_error(error));
+    remote_err = g_dbus_error_get_remote_error(error);
+    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+    g_free(remote_err);
+    g_clear_error(&error);
+
+    /* 18. Test SetDNS empty list */
+    GVariantBuilder empty_dns_b;
+    g_variant_builder_init(&empty_dns_b, G_VARIANT_TYPE("as"));
+    reply = call_dbus_iterative(
+        conn,
+        "SetDNS",
+        g_variant_new("(@as)", g_variant_builder_end(&empty_dns_b)),
+        G_VARIANT_TYPE("(s)"),
+        &error
+    );
+    g_assert_null(reply);
+    g_assert_nonnull(error);
+    g_assert_true(g_dbus_error_is_remote_error(error));
+    remote_err = g_dbus_error_get_remote_error(error);
+    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+    g_free(remote_err);
+    g_clear_error(&error);
+
+    /* 19. Test SetDNS valid list (Cloudflare) */
+    GVariantBuilder valid_dns_b;
+    g_variant_builder_init(&valid_dns_b, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&valid_dns_b, "s", "1.1.1.1");
+    g_variant_builder_add(&valid_dns_b, "s", "1.0.0.1");
+    reply = call_dbus_iterative(
+        conn,
+        "SetDNS",
+        g_variant_new("(@as)", g_variant_builder_end(&valid_dns_b)),
+        G_VARIANT_TYPE("(s)"),
+        &error
+    );
+    g_assert_no_error(error);
+    g_assert_nonnull(reply);
+    const gchar *set_res = NULL;
+    g_variant_get(reply, "(&s)", &set_res);
+    g_assert_cmpstr(set_res, ==, "OK");
+    g_variant_unref(reply);
+
+    /* 20. Verify GetDNS reflects custom DNS */
+    reply = call_dbus_iterative(
+        conn,
+        "GetDNS",
+        NULL,
+        G_VARIANT_TYPE("(asb)"),
+        &error
+    );
+    g_assert_no_error(error);
+    g_assert_nonnull(reply);
+    g_variant_get(reply, "(asb)", &dns_iter, &is_custom);
+    g_assert_true(is_custom);
+    const gchar *server_val = NULL;
+    gboolean found_cf = FALSE;
+    while (g_variant_iter_next(dns_iter, "&s", &server_val)) {
+        if (g_strcmp0(server_val, "1.1.1.1") == 0) {
+            found_cf = TRUE;
+        }
+    }
+    g_assert_true(found_cf);
+    g_variant_iter_free(dns_iter);
+    g_variant_unref(reply);
+
+    /* 21. Test ResetDNS */
+    reply = call_dbus_iterative(
+        conn,
+        "ResetDNS",
+        NULL,
+        G_VARIANT_TYPE("(s)"),
+        &error
+    );
+    g_assert_no_error(error);
+    g_assert_nonnull(reply);
+    const gchar *reset_res = NULL;
+    g_variant_get(reply, "(&s)", &reset_res);
+    g_assert_cmpstr(reset_res, ==, "OK");
+    g_variant_unref(reply);
+
+    /* Verify GetDNS reflects reset */
+    reply = call_dbus_iterative(
+        conn,
+        "GetDNS",
+        NULL,
+        G_VARIANT_TYPE("(asb)"),
+        &error
+    );
+    g_assert_no_error(error);
+    g_assert_nonnull(reply);
+    g_variant_get(reply, "(asb)", &dns_iter, &is_custom);
+    g_assert_false(is_custom);
+    g_variant_iter_free(dns_iter);
+    g_variant_unref(reply);
+
+    /* Cleanup temp test dir */
+    g_unsetenv("MULTIWIFI_DNS_CONF_DIR");
+    g_unsetenv("MULTIWIFI_RESOLV_CONF");
+    g_unlink(fake_resolv);
+    g_free(fake_resolv);
+    g_rmdir(tmp_dir);
+    g_free(tmp_dir);
+
     g_object_unref(conn);
     multiwifi_daemon_service_stop(svc);
     g_object_unref(svc);
@@ -605,6 +748,41 @@ static void test_daemon_polkit_denial(void)
         "StopDaemon",
         NULL,
         NULL,
+        &error
+    );
+    g_assert_null(reply);
+    g_assert_nonnull(error);
+    g_assert_true(g_dbus_error_is_remote_error(error));
+    remote_err = g_dbus_error_get_remote_error(error);
+    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_NOT_AUTHORIZED);
+    g_free(remote_err);
+    g_clear_error(&error);
+
+    /* Mutating method SetDNS requires polkit */
+    GVariantBuilder polkit_dns_b;
+    g_variant_builder_init(&polkit_dns_b, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&polkit_dns_b, "s", "1.1.1.1");
+    reply = call_dbus_iterative(
+        conn,
+        "SetDNS",
+        g_variant_new("(@as)", g_variant_builder_end(&polkit_dns_b)),
+        G_VARIANT_TYPE("(s)"),
+        &error
+    );
+    g_assert_null(reply);
+    g_assert_nonnull(error);
+    g_assert_true(g_dbus_error_is_remote_error(error));
+    remote_err = g_dbus_error_get_remote_error(error);
+    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_NOT_AUTHORIZED);
+    g_free(remote_err);
+    g_clear_error(&error);
+
+    /* Mutating method ResetDNS requires polkit */
+    reply = call_dbus_iterative(
+        conn,
+        "ResetDNS",
+        NULL,
+        G_VARIANT_TYPE("(s)"),
         &error
     );
     g_assert_null(reply);

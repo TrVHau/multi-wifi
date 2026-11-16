@@ -60,6 +60,20 @@
     <method name="StopDaemon">
     </method>
 
+    <method name="GetDNS">
+      <arg name="servers" type="as" direction="out"/>
+      <arg name="is_custom" type="b" direction="out"/>
+    </method>
+
+    <method name="SetDNS">
+      <arg name="servers" type="as" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
+    </method>
+
+    <method name="ResetDNS">
+      <arg name="result" type="s" direction="out"/>
+    </method>
+
     <!-- Signals -->
     <signal name="DeviceChanged">
       <arg name="device" type="a{sv}"/>
