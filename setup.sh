@@ -52,7 +52,7 @@ do_install() {
     echo -e "${BLUE}3/4. Kích hoạt dịch vụ hệ thống multiwifi-daemon...${NC}"
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload
-        systemctl enable --now multiwifi-daemon
+        systemctl restart multiwifi-daemon || systemctl enable --now multiwifi-daemon
         echo -e "  ${GREEN}✔ multiwifi-daemon.service đã được khởi chạy thành công.${NC}"
     fi
 
