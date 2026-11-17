@@ -191,29 +191,12 @@ gboolean multiwifi_firewall_teardown(MultiWifiFirewall *self, GError **error)
     nft_ctx_buffer_output(nft);
     nft_ctx_buffer_error(nft);
 
-    const char *cmd = "delete table inet " MULTIWIFI_NFT_TABLE_NAME "\n";
-    int rc = nft_run_cmd_from_buffer(nft, cmd);
-    if (rc != 0) {
-        /* Also attempt cleaning up legacy table ip if present */
-        const char *legacy_cmd = "delete table ip " MULTIWIFI_NFT_TABLE_NAME "\n";
-        nft_run_cmd_from_buffer(nft, legacy_cmd);
+    /* Unconditionally delete both the inet filter table and the ip nat masquerade table */
+    const char *cmd_inet = "delete table inet " MULTIWIFI_NFT_TABLE_NAME "\n";
+    nft_run_cmd_from_buffer(nft, cmd_inet);
 
-        const char *err_msg = nft_ctx_get_error_buffer(nft);
-        if (err_msg != NULL && strstr(err_msg, "No such file or directory") != NULL) {
-            /* Table was already absent, success */
-            nft_ctx_free(nft);
-            g_mutex_lock(&self->mutex);
-            self->is_active = FALSE;
-            g_mutex_unlock(&self->mutex);
-            return TRUE;
-        }
-
-        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                    "nftables teardown failed (rc=%d): %s",
-                    rc, (err_msg && *err_msg) ? err_msg : "Unknown error");
-        nft_ctx_free(nft);
-        return FALSE;
-    }
+    const char *cmd_ip = "delete table ip " MULTIWIFI_NFT_TABLE_NAME "\n";
+    nft_run_cmd_from_buffer(nft, cmd_ip);
 
     nft_ctx_free(nft);
     g_mutex_lock(&self->mutex);
@@ -243,21 +226,16 @@ gboolean multiwifi_firewall_verify(MultiWifiFirewall *self,
     nft_ctx_buffer_output(nft);
     nft_ctx_buffer_error(nft);
 
-    const char *cmd = "list table inet " MULTIWIFI_NFT_TABLE_NAME "\n";
-    int rc = nft_run_cmd_from_buffer(nft, cmd);
-    if (rc == 0) {
+    const char *cmd1 = "list table inet " MULTIWIFI_NFT_TABLE_NAME "\n";
+    int rc1 = nft_run_cmd_from_buffer(nft, cmd1);
+
+    const char *cmd2 = "list table ip " MULTIWIFI_NFT_TABLE_NAME "\n";
+    int rc2 = nft_run_cmd_from_buffer(nft, cmd2);
+
+    if (rc1 == 0 || rc2 == 0) {
         *exists = TRUE;
     } else {
-        const char *err_msg = nft_ctx_get_error_buffer(nft);
-        if (err_msg != NULL && strstr(err_msg, "No such file or directory") != NULL) {
-            *exists = FALSE;
-        } else {
-            g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                        "nftables verify failed (rc=%d): %s",
-                        rc, (err_msg && *err_msg) ? err_msg : "Unknown error");
-            nft_ctx_free(nft);
-            return FALSE;
-        }
+        *exists = FALSE;
     }
 
     nft_ctx_free(nft);

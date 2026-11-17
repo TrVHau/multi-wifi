@@ -155,6 +155,29 @@ const gchar *multiwifi_path_state_to_string(MultiWifiPathState state)
     }
 }
 
+MultiWifiPathState multiwifi_path_state_from_string(const gchar *str)
+{
+    if (str == NULL) {
+        return MULTIWIFI_PATH_STATE_UNKNOWN;
+    }
+    if (g_ascii_strcasecmp(str, "Online") == 0) {
+        return MULTIWIFI_PATH_STATE_ONLINE;
+    }
+    if (g_ascii_strcasecmp(str, "Degraded") == 0) {
+        return MULTIWIFI_PATH_STATE_DEGRADED;
+    }
+    if (g_ascii_strcasecmp(str, "Local Only") == 0) {
+        return MULTIWIFI_PATH_STATE_LOCAL_ONLY;
+    }
+    if (g_ascii_strcasecmp(str, "Probing") == 0) {
+        return MULTIWIFI_PATH_STATE_PROBING;
+    }
+    if (g_ascii_strcasecmp(str, "Offline") == 0) {
+        return MULTIWIFI_PATH_STATE_OFFLINE;
+    }
+    return MULTIWIFI_PATH_STATE_UNKNOWN;
+}
+
 static PathEntry *path_entry_new(const gchar *ifname)
 {
     PathEntry *entry = g_new0(PathEntry, 1);
@@ -277,38 +300,28 @@ static PathEntry *find_entry_locked(MultiWifiPathMonitor *self, const gchar *ifn
 }
 
 /* Default unprivileged socket probe: TCP connect attempt to target on DNS (53) or HTTP (80) */
-static gboolean default_socket_probe(const gchar *ifname,
-                                     const gchar *source_ip,
-                                     const gchar *target_ip,
-                                     gdouble *out_rtt_ms,
-                                     gpointer user_data)
+static gboolean try_single_port_probe(const gchar *ifname,
+                                      const gchar *source_ip,
+                                      struct in_addr dest_ip,
+                                      uint16_t port,
+                                      int timeout_ms)
 {
-    (void)user_data;
-
-    if (target_ip == NULL || *target_ip == '\0') {
-        return FALSE;
-    }
-
-    gint64 start_time = g_get_monotonic_time();
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    int sock = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (sock < 0) {
         return FALSE;
     }
 
-    /* Bind to specific device name if given */
     if (ifname != NULL && *ifname != '\0') {
 #ifdef SO_BINDTODEVICE
         (void)setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, ifname, (socklen_t)(strlen(ifname) + 1));
 #endif
     }
 
-    /* Set socket non-blocking */
     int flags = fcntl(sock, F_GETFL, 0);
     if (flags >= 0) {
         fcntl(sock, F_SETFL, flags | O_NONBLOCK);
     }
 
-    /* Bind to local source IP if present to pin outgoing traffic to this uplink */
     if (source_ip != NULL && *source_ip != '\0') {
         gchar *clean_ip = g_strdup(source_ip);
         gchar *slash = strchr(clean_ip, '/');
@@ -329,22 +342,11 @@ static gboolean default_socket_probe(const gchar *ifname,
         g_free(clean_ip);
     }
 
-    gchar *clean_target = g_strdup(target_ip);
-    gchar *target_slash = strchr(clean_target, '/');
-    if (target_slash != NULL) {
-        *target_slash = '\0';
-    }
-
     struct sockaddr_in dest_addr;
     memset(&dest_addr, 0, sizeof(dest_addr));
     dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(53); /* DNS port probe */
-    if (inet_pton(AF_INET, clean_target, &dest_addr.sin_addr) != 1) {
-        g_free(clean_target);
-        close(sock);
-        return FALSE;
-    }
-    g_free(clean_target);
+    dest_addr.sin_port = htons(port);
+    dest_addr.sin_addr = dest_ip;
 
     int res = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     gboolean success = FALSE;
@@ -357,8 +359,8 @@ static gboolean default_socket_probe(const gchar *ifname,
         FD_SET(sock, &wfds);
 
         struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 400000; /* 400ms timeout per probe */
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
 
         int sel = select(sock + 1, NULL, &wfds, NULL, &tv);
         if (sel > 0) {
@@ -374,6 +376,48 @@ static gboolean default_socket_probe(const gchar *ifname,
     }
 
     close(sock);
+    return success;
+}
+
+static gboolean default_socket_probe(const gchar *ifname,
+                                     const gchar *source_ip,
+                                     const gchar *target_ip,
+                                     gdouble *out_rtt_ms,
+                                     gpointer user_data)
+{
+    (void)user_data;
+
+    if (target_ip == NULL || *target_ip == '\0') {
+        return FALSE;
+    }
+
+    gint64 start_time = g_get_monotonic_time();
+
+    gchar *clean_target = g_strdup(target_ip);
+    gchar *target_slash = strchr(clean_target, '/');
+    if (target_slash != NULL) {
+        *target_slash = '\0';
+    }
+
+    struct in_addr dest_ip;
+    if (inet_pton(AF_INET, clean_target, &dest_ip) != 1) {
+        g_free(clean_target);
+        return FALSE;
+    }
+    g_free(clean_target);
+
+    /* 1. Try DNS port 53 with 250ms timeout */
+    gboolean success = try_single_port_probe(ifname, source_ip, dest_ip, 53, 250);
+
+    /* 2. Fallback to HTTP port 80 (common for home router admin portal) if port 53 was dropped */
+    if (!success) {
+        success = try_single_port_probe(ifname, source_ip, dest_ip, 80, 250);
+    }
+
+    /* 3. Fallback to HTTPS port 443 */
+    if (!success) {
+        success = try_single_port_probe(ifname, source_ip, dest_ip, 443, 250);
+    }
 
     gint64 elapsed_us = g_get_monotonic_time() - start_time;
     if (out_rtt_ms != NULL) {
@@ -768,4 +812,31 @@ MultiWifiPathInfo *multiwifi_path_monitor_find_path(MultiWifiPathMonitor *self,
     g_mutex_unlock(&self->mutex);
 
     return found;
+}
+
+void multiwifi_path_monitor_update_path_info(MultiWifiPathMonitor *self,
+                                             const MultiWifiPathInfo *info)
+{
+    if (self == NULL || info == NULL || info->ifname == NULL) {
+        return;
+    }
+
+    g_mutex_lock(&self->mutex);
+    if (self->paths == NULL) {
+        g_mutex_unlock(&self->mutex);
+        return;
+    }
+
+    PathEntry *entry = find_entry_locked(self, info->ifname);
+    if (entry != NULL) {
+        multiwifi_path_info_free(entry->info);
+        entry->info = multiwifi_path_info_copy(info);
+    } else {
+        PathEntry *e = g_new0(PathEntry, 1);
+        e->info = multiwifi_path_info_copy(info);
+        g_ptr_array_add(self->paths, e);
+    }
+    g_mutex_unlock(&self->mutex);
+
+    g_signal_emit(self, s_signals[SIGNAL_PATHS_CHANGED], 0);
 }

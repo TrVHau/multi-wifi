@@ -24,6 +24,7 @@ typedef struct {
     uint32_t fwmark;
     uint32_t fwmask;
     uint32_t metric;
+    int orig_rp_filter;
 } MultiWifiUplinkRouteConfig;
 
 typedef struct {

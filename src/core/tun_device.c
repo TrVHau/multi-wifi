@@ -69,7 +69,7 @@ gboolean multiwifi_tun_device_open(MultiWifiTunDevice *self, GError **error)
         return TRUE; /* Already open */
     }
 
-    int fd = open("/dev/net/tun", O_RDWR | O_NONBLOCK);
+    int fd = open("/dev/net/tun", O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
         int err = errno;
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
@@ -100,7 +100,7 @@ gboolean multiwifi_tun_device_open(MultiWifiTunDevice *self, GError **error)
     self->actual_name = g_strdup(ifr.ifr_name);
 
     /* Set MTU */
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (sock >= 0) {
         memset(&ifr, 0, sizeof(ifr));
         g_strlcpy(ifr.ifr_name, self->actual_name, IFNAMSIZ);
@@ -186,7 +186,7 @@ gboolean multiwifi_tun_device_configure_ip(MultiWifiTunDevice *self,
         return FALSE;
     }
 
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (sock < 0) {
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
                     "Failed to create configuration socket: %s", g_strerror(errno));

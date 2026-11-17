@@ -64,6 +64,7 @@ struct _MultiWifiWindow {
     gboolean updating_switches;
     gboolean daemon_action_pending;
     GPid spawned_daemon_pid;
+    guint path_sub_id;
 };
 
 G_DEFINE_TYPE(MultiWifiWindow, multiwifi_window, GTK_TYPE_APPLICATION_WINDOW)
@@ -83,6 +84,8 @@ typedef struct {
     gboolean selected_is_saved;
     gboolean selected_is_open;
     GCancellable *cancellable;
+    int active_async_tasks;
+    gboolean is_destroyed;
 } WifiSelectDialog;
 
 typedef struct {
@@ -104,6 +107,9 @@ typedef struct {
 
     GtkWidget *apply_btn;
     GtkWidget *reset_btn;
+    GCancellable *cancellable;
+    int active_async_tasks;
+    gboolean is_destroyed;
 } DnsConfigDialog;
 
 static void update_devices_ui(MultiWifiWindow *self);
@@ -230,12 +236,22 @@ static void wifi_select_dialog_free(WifiSelectDialog *dlg)
     if (dlg == NULL) {
         return;
     }
+    dlg->is_destroyed = TRUE;
+    dlg->dialog_window = NULL;
     if (dlg->cancellable != NULL) {
         g_cancellable_cancel(dlg->cancellable);
+    }
+    if (dlg->active_async_tasks > 0) {
+        return;
+    }
+    if (dlg->cancellable != NULL) {
         g_object_unref(dlg->cancellable);
+        dlg->cancellable = NULL;
     }
     g_free(dlg->ifname);
+    dlg->ifname = NULL;
     g_free(dlg->selected_ssid);
+    dlg->selected_ssid = NULL;
     g_free(dlg);
 }
 
@@ -371,14 +387,23 @@ static void on_dialog_scan_ready(GObject *source, GAsyncResult *res, gpointer us
     WifiSelectDialog *dlg = (WifiSelectDialog *)user_data;
     GError *error = NULL;
 
-    multiwifi_inventory_request_scan_finish(dlg->main_win->inventory, res, &error);
-    gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
-    gtk_widget_set_sensitive(dlg->scan_btn, TRUE);
-    gtk_widget_set_sensitive(dlg->list_box, TRUE);
+    dlg->active_async_tasks--;
 
+    multiwifi_inventory_request_scan_finish(dlg->main_win->inventory, res, &error);
     if (error != NULL) {
         g_clear_error(&error);
     }
+
+    if (dlg->is_destroyed) {
+        if (dlg->active_async_tasks <= 0) {
+            wifi_select_dialog_free(dlg);
+        }
+        return;
+    }
+
+    gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
+    gtk_widget_set_sensitive(dlg->scan_btn, TRUE);
+    gtk_widget_set_sensitive(dlg->list_box, TRUE);
 
     populate_wifi_list(dlg);
     gtk_label_set_text(GTK_LABEL(dlg->status_lbl), "");
@@ -394,6 +419,7 @@ static void on_dialog_scan_clicked(GtkButton *btn, gpointer user_data)
     gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
         "<span size='small' color='#89b4fa'>Scanning networks...</span>");
 
+    dlg->active_async_tasks++;
     multiwifi_inventory_request_scan_async(
         dlg->main_win->inventory,
         dlg->ifname,
@@ -409,23 +435,37 @@ static void on_dialog_connect_ready(GObject *source, GAsyncResult *res, gpointer
     WifiSelectDialog *dlg = (WifiSelectDialog *)user_data;
     GError *error = NULL;
 
+    dlg->active_async_tasks--;
+
     gboolean ok = multiwifi_inventory_connect_wifi_finish(dlg->main_win->inventory, res, &error);
+
+    if (dlg->is_destroyed) {
+        if (error != NULL) {
+            g_clear_error(&error);
+        }
+        if (dlg->active_async_tasks <= 0) {
+            wifi_select_dialog_free(dlg);
+        }
+        return;
+    }
+
     gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
 
     if (ok) {
         gtk_window_destroy(GTK_WINDOW(dlg->dialog_window));
-    } else {
-        gtk_widget_set_sensitive(dlg->connect_btn, TRUE);
-        gtk_widget_set_sensitive(dlg->scan_btn, TRUE);
-        gtk_widget_set_sensitive(dlg->list_box, TRUE);
-
-        gchar *escaped_msg = g_markup_escape_text(error ? error->message : "Failed to connect", -1);
-        gchar *err_markup = g_strdup_printf("<span size='small' color='#f38ba8'>%s</span>", escaped_msg);
-        gtk_label_set_markup(GTK_LABEL(dlg->status_lbl), err_markup);
-        g_free(err_markup);
-        g_free(escaped_msg);
-        g_clear_error(&error);
+        return;
     }
+
+    gtk_widget_set_sensitive(dlg->connect_btn, TRUE);
+    gtk_widget_set_sensitive(dlg->scan_btn, TRUE);
+    gtk_widget_set_sensitive(dlg->list_box, TRUE);
+
+    gchar *escaped_msg = g_markup_escape_text(error ? error->message : "Failed to connect", -1);
+    gchar *err_markup = g_strdup_printf("<span size='small' color='#f38ba8'>%s</span>", escaped_msg);
+    gtk_label_set_markup(GTK_LABEL(dlg->status_lbl), err_markup);
+    g_free(err_markup);
+    g_free(escaped_msg);
+    g_clear_error(&error);
 }
 
 static void on_dialog_connect_clicked(GtkButton *btn, gpointer user_data)
@@ -454,6 +494,7 @@ static void on_dialog_connect_clicked(GtkButton *btn, gpointer user_data)
     g_free(status_markup);
     g_free(escaped_ssid);
 
+    dlg->active_async_tasks++;
     multiwifi_inventory_connect_wifi_async(
         dlg->main_win->inventory,
         dlg->ifname,
@@ -1385,6 +1426,102 @@ static gboolean on_bonding_switch_state_set(GtkSwitch *sw, gboolean state, gpoin
     return FALSE;
 }
 
+static void update_path_from_variant_dict(MultiWifiWindow *self, GVariant *dict)
+{
+    if (self == NULL || self->path_monitor == NULL || dict == NULL) {
+        return;
+    }
+
+    const gchar *ifname = NULL;
+    const gchar *gateway = NULL;
+    const gchar *source_ip = NULL;
+    const gchar *state_str = NULL;
+    const gchar *status_reason = NULL;
+    gdouble rtt_ms = 0.0;
+    gdouble min_rtt_ms = 0.0;
+    gdouble max_rtt_ms = 0.0;
+    gdouble jitter_ms = 0.0;
+    guint32 loss_percent = 0;
+    gboolean eligible = FALSE;
+
+    g_variant_lookup(dict, "ifname", "&s", &ifname);
+    g_variant_lookup(dict, "gateway", "&s", &gateway);
+    g_variant_lookup(dict, "source_ip", "&s", &source_ip);
+    g_variant_lookup(dict, "state", "&s", &state_str);
+    g_variant_lookup(dict, "status_reason", "&s", &status_reason);
+    g_variant_lookup(dict, "rtt_ms", "d", &rtt_ms);
+    g_variant_lookup(dict, "min_rtt_ms", "d", &min_rtt_ms);
+    g_variant_lookup(dict, "max_rtt_ms", "d", &max_rtt_ms);
+    g_variant_lookup(dict, "jitter_ms", "d", &jitter_ms);
+    g_variant_lookup(dict, "loss_percent", "u", &loss_percent);
+    g_variant_lookup(dict, "eligible", "b", &eligible);
+
+    if (ifname != NULL && *ifname != '\0') {
+        MultiWifiPathInfo info;
+        memset(&info, 0, sizeof(info));
+        info.ifname = (gchar *)ifname;
+        info.gateway = (gchar *)gateway;
+        info.source_ip = (gchar *)source_ip;
+        info.state = multiwifi_path_state_from_string(state_str);
+        info.status_reason = (gchar *)status_reason;
+        info.rtt_ms = rtt_ms;
+        info.min_rtt_ms = min_rtt_ms;
+        info.max_rtt_ms = max_rtt_ms;
+        info.jitter_ms = jitter_ms;
+        info.packet_loss_percent = (guint)loss_percent;
+        info.is_eligible = eligible;
+
+        multiwifi_path_monitor_update_path_info(self->path_monitor, &info);
+    }
+}
+
+static void on_dbus_path_signal(GDBusConnection *connection,
+                                const gchar *sender_name,
+                                const gchar *object_path,
+                                const gchar *interface_name,
+                                const gchar *signal_name,
+                                GVariant *parameters,
+                                gpointer user_data)
+{
+    (void)connection;
+    (void)sender_name;
+    (void)object_path;
+    (void)interface_name;
+    (void)signal_name;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+
+    if (parameters == NULL || !g_variant_is_of_type(parameters, G_VARIANT_TYPE("(a{sv})"))) {
+        return;
+    }
+
+    GVariant *dict = NULL;
+    g_variant_get(parameters, "(@a{sv})", &dict);
+    if (dict != NULL) {
+        update_path_from_variant_dict(self, dict);
+        g_variant_unref(dict);
+    }
+}
+
+static void on_get_paths_done(GObject *source, GAsyncResult *res, gpointer user_data)
+{
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+    if (reply != NULL) {
+        GVariantIter *iter = NULL;
+        g_variant_get(reply, "(aa{sv})", &iter);
+        GVariant *dict = NULL;
+        while (g_variant_iter_next(iter, "@a{sv}", &dict)) {
+            update_path_from_variant_dict(self, dict);
+            g_variant_unref(dict);
+        }
+        g_variant_iter_free(iter);
+        g_variant_unref(reply);
+    } else {
+        g_clear_error(&error);
+    }
+}
+
 static void on_daemon_name_appeared(GDBusConnection *connection,
                                     const gchar *name,
                                     const gchar *name_owner,
@@ -1399,6 +1536,26 @@ static void on_daemon_name_appeared(GDBusConnection *connection,
         self->system_bus = g_object_ref(connection);
     }
 
+    /* Pause local background socket probes to avoid duplicate traffic when daemon is active */
+    if (self->path_monitor != NULL) {
+        multiwifi_path_monitor_stop(self->path_monitor);
+    }
+
+    if (self->path_sub_id == 0 && self->system_bus != NULL) {
+        self->path_sub_id = g_dbus_connection_signal_subscribe(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_INTERFACE,
+            "PathChanged",
+            MULTIWIFI_DBUS_PATH,
+            NULL,
+            G_DBUS_SIGNAL_FLAGS_NONE,
+            on_dbus_path_signal,
+            self,
+            NULL
+        );
+    }
+
     g_dbus_connection_call(
         self->system_bus,
         MULTIWIFI_DBUS_NAME,
@@ -1411,6 +1568,22 @@ static void on_daemon_name_appeared(GDBusConnection *connection,
         5000,
         NULL,
         on_status_query_done,
+        self
+    );
+
+    /* Initial sync of path status from daemon */
+    g_dbus_connection_call(
+        self->system_bus,
+        MULTIWIFI_DBUS_NAME,
+        MULTIWIFI_DBUS_PATH,
+        MULTIWIFI_DBUS_INTERFACE,
+        "GetPaths",
+        NULL,
+        G_VARIANT_TYPE("(aa{sv})"),
+        G_DBUS_CALL_FLAGS_NONE,
+        5000,
+        NULL,
+        on_get_paths_done,
         self
     );
 
@@ -1430,6 +1603,19 @@ static void on_daemon_name_vanished(GDBusConnection *connection,
     self->lb_active = FALSE;
     self->bonding_active = FALSE;
     self->daemon_action_pending = FALSE;
+
+    if (self->path_sub_id > 0) {
+        if (self->system_bus != NULL) {
+            g_dbus_connection_signal_unsubscribe(self->system_bus, self->path_sub_id);
+        }
+        self->path_sub_id = 0;
+    }
+
+    /* Resume local standalone socket probes when daemon is offline */
+    if (self->path_monitor != NULL) {
+        multiwifi_path_monitor_start(self->path_monitor);
+    }
+
     update_control_buttons_state(self);
     gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
         "<span size='small' color='#f38ba8'>⚠ Daemon offline • Run 'sudo ./build/multiwifi-daemon' to start</span>");
@@ -1455,7 +1641,7 @@ static void on_diagnostics_clicked(GtkButton *btn, gpointer user_data)
             NULL
         );
     }
-    if (self->path_monitor != NULL) {
+    if (self->path_monitor != NULL && !self->daemon_connected) {
         multiwifi_path_monitor_probe_all_async(self->path_monitor);
     }
 }
@@ -1464,6 +1650,18 @@ static void dns_config_dialog_free(DnsConfigDialog *dlg)
 {
     if (dlg == NULL) {
         return;
+    }
+    dlg->is_destroyed = TRUE;
+    dlg->dialog_window = NULL;
+    if (dlg->cancellable != NULL) {
+        g_cancellable_cancel(dlg->cancellable);
+    }
+    if (dlg->active_async_tasks > 0) {
+        return;
+    }
+    if (dlg->cancellable != NULL) {
+        g_object_unref(dlg->cancellable);
+        dlg->cancellable = NULL;
     }
     g_free(dlg);
 }
@@ -1481,6 +1679,22 @@ static void on_get_dns_done(GObject *source, GAsyncResult *res, gpointer user_da
     DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
     GError *error = NULL;
     GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+    dlg->active_async_tasks--;
+
+    if (dlg->is_destroyed) {
+        if (reply != NULL) {
+            g_variant_unref(reply);
+        }
+        if (error != NULL) {
+            g_clear_error(&error);
+        }
+        if (dlg->active_async_tasks <= 0) {
+            dns_config_dialog_free(dlg);
+        }
+        return;
+    }
+
     gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
 
     if (reply != NULL) {
@@ -1566,6 +1780,22 @@ static void on_set_dns_done(GObject *source, GAsyncResult *res, gpointer user_da
     DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
     GError *error = NULL;
     GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+    dlg->active_async_tasks--;
+
+    if (dlg->is_destroyed) {
+        if (reply != NULL) {
+            g_variant_unref(reply);
+        }
+        if (error != NULL) {
+            g_clear_error(&error);
+        }
+        if (dlg->active_async_tasks <= 0) {
+            dns_config_dialog_free(dlg);
+        }
+        return;
+    }
+
     gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
     gtk_widget_set_sensitive(dlg->apply_btn, TRUE);
     gtk_widget_set_sensitive(dlg->reset_btn, TRUE);
@@ -1577,6 +1807,7 @@ static void on_set_dns_done(GObject *source, GAsyncResult *res, gpointer user_da
 
         if (dlg->main_win->system_bus != NULL) {
             gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+            dlg->active_async_tasks++;
             g_dbus_connection_call(
                 dlg->main_win->system_bus,
                 MULTIWIFI_DBUS_NAME,
@@ -1587,7 +1818,7 @@ static void on_set_dns_done(GObject *source, GAsyncResult *res, gpointer user_da
                 G_VARIANT_TYPE("(asb)"),
                 G_DBUS_CALL_FLAGS_NONE,
                 5000,
-                NULL,
+                dlg->cancellable,
                 on_get_dns_done,
                 dlg
             );
@@ -1607,6 +1838,22 @@ static void on_reset_dns_done(GObject *source, GAsyncResult *res, gpointer user_
     DnsConfigDialog *dlg = (DnsConfigDialog *)user_data;
     GError *error = NULL;
     GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &error);
+
+    dlg->active_async_tasks--;
+
+    if (dlg->is_destroyed) {
+        if (reply != NULL) {
+            g_variant_unref(reply);
+        }
+        if (error != NULL) {
+            g_clear_error(&error);
+        }
+        if (dlg->active_async_tasks <= 0) {
+            dns_config_dialog_free(dlg);
+        }
+        return;
+    }
+
     gtk_spinner_stop(GTK_SPINNER(dlg->spinner));
     gtk_widget_set_sensitive(dlg->apply_btn, TRUE);
     gtk_widget_set_sensitive(dlg->reset_btn, TRUE);
@@ -1618,6 +1865,7 @@ static void on_reset_dns_done(GObject *source, GAsyncResult *res, gpointer user_
 
         if (dlg->main_win->system_bus != NULL) {
             gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+            dlg->active_async_tasks++;
             g_dbus_connection_call(
                 dlg->main_win->system_bus,
                 MULTIWIFI_DBUS_NAME,
@@ -1628,7 +1876,7 @@ static void on_reset_dns_done(GObject *source, GAsyncResult *res, gpointer user_
                 G_VARIANT_TYPE("(asb)"),
                 G_DBUS_CALL_FLAGS_NONE,
                 5000,
-                NULL,
+                dlg->cancellable,
                 on_get_dns_done,
                 dlg
             );
@@ -1726,6 +1974,7 @@ static void on_dns_apply_clicked(GtkButton *btn, gpointer user_data)
     gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
         "<span color='#89b4fa'>Applying DNS configuration via daemon...</span>");
 
+    dlg->active_async_tasks++;
     g_dbus_connection_call(
         dlg->main_win->system_bus,
         MULTIWIFI_DBUS_NAME,
@@ -1736,7 +1985,7 @@ static void on_dns_apply_clicked(GtkButton *btn, gpointer user_data)
         G_VARIANT_TYPE("(s)"),
         G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
         15000,
-        NULL,
+        dlg->cancellable,
         on_set_dns_done,
         dlg
     );
@@ -1758,6 +2007,7 @@ static void on_dns_reset_clicked(GtkButton *btn, gpointer user_data)
     gtk_label_set_markup(GTK_LABEL(dlg->status_lbl),
         "<span color='#89b4fa'>Restoring DHCP DNS configuration...</span>");
 
+    dlg->active_async_tasks++;
     g_dbus_connection_call(
         dlg->main_win->system_bus,
         MULTIWIFI_DBUS_NAME,
@@ -1768,7 +2018,7 @@ static void on_dns_reset_clicked(GtkButton *btn, gpointer user_data)
         G_VARIANT_TYPE("(s)"),
         G_DBUS_CALL_FLAGS_ALLOW_INTERACTIVE_AUTHORIZATION,
         15000,
-        NULL,
+        dlg->cancellable,
         on_reset_dns_done,
         dlg
     );
@@ -1781,6 +2031,7 @@ static void on_dns_clicked(GtkButton *btn, gpointer user_data)
 
     DnsConfigDialog *dlg = g_new0(DnsConfigDialog, 1);
     dlg->main_win = self;
+    dlg->cancellable = g_cancellable_new();
 
     dlg->dialog_window = gtk_window_new();
     gtk_widget_add_css_class(dlg->dialog_window, "main-window");
@@ -1926,6 +2177,7 @@ static void on_dns_clicked(GtkButton *btn, gpointer user_data)
     /* Query current DNS status from daemon */
     if (self->daemon_connected && self->system_bus != NULL) {
         gtk_spinner_start(GTK_SPINNER(dlg->spinner));
+        dlg->active_async_tasks++;
         g_dbus_connection_call(
             self->system_bus,
             MULTIWIFI_DBUS_NAME,
@@ -1936,7 +2188,7 @@ static void on_dns_clicked(GtkButton *btn, gpointer user_data)
             G_VARIANT_TYPE("(asb)"),
             G_DBUS_CALL_FLAGS_NONE,
             5000,
-            NULL,
+            dlg->cancellable,
             on_get_dns_done,
             dlg
         );
@@ -1979,6 +2231,13 @@ static void multiwifi_window_dispose(GObject *object)
         kill(self->spawned_daemon_pid, SIGTERM);
         g_spawn_close_pid(self->spawned_daemon_pid);
         self->spawned_daemon_pid = 0;
+    }
+
+    if (self->path_sub_id > 0) {
+        if (self->system_bus != NULL) {
+            g_dbus_connection_signal_unsubscribe(self->system_bus, self->path_sub_id);
+        }
+        self->path_sub_id = 0;
     }
 
     if (self->bus_watcher_id > 0) {

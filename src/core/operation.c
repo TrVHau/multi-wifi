@@ -157,6 +157,8 @@ MultiWifiOpManager *multiwifi_op_manager_new(void)
     return g_object_new(MULTIWIFI_TYPE_OP_MANAGER, NULL);
 }
 
+#define MULTIWIFI_MAX_OPERATION_HISTORY 50
+
 gchar *multiwifi_op_manager_create_op(MultiWifiOpManager *self, const gchar *action)
 {
     if (self == NULL) {
@@ -167,6 +169,10 @@ gchar *multiwifi_op_manager_create_op(MultiWifiOpManager *self, const gchar *act
     gchar *op_id = g_strdup(op->operation_id);
 
     g_mutex_lock(&self->mutex);
+    /* Prune oldest finished operations if queue reaches capacity */
+    while (self->operations->len >= MULTIWIFI_MAX_OPERATION_HISTORY) {
+        g_ptr_array_remove_index(self->operations, 0);
+    }
     g_ptr_array_add(self->operations, op);
     g_mutex_unlock(&self->mutex);
 

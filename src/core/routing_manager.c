@@ -11,6 +11,7 @@ struct _MultiWifiRoutingManager {
     MultiWifiRoutePlan *active_plan;
     gboolean is_active;
     gboolean rp_filter_all_modified;
+    int orig_rp_filter_all;
     GMutex mutex;
 };
 
@@ -57,6 +58,7 @@ void multiwifi_route_plan_add_uplink(MultiWifiRoutePlan *plan,
     cfg->fwmark = MULTIWIFI_BASE_FWMARK + (index + 1);
     cfg->fwmask = MULTIWIFI_DEFAULT_FWMASK;
     cfg->metric = 100 + (index * 10);
+    cfg->orig_rp_filter = -1;
 
     g_ptr_array_add(plan->uplinks, cfg);
 }
@@ -105,7 +107,11 @@ static void multiwifi_routing_manager_class_init(MultiWifiRoutingManagerClass *k
 static void multiwifi_routing_manager_init(MultiWifiRoutingManager *self)
 {
     g_mutex_init(&self->mutex);
-    self->journal_dir = g_build_filename(g_get_user_runtime_dir(), "multiwifi", "journals", NULL);
+    if (geteuid() == 0 && g_file_test("/run", G_FILE_TEST_IS_DIR)) {
+        self->journal_dir = g_strdup("/run/multiwifi/journals");
+    } else {
+        self->journal_dir = g_build_filename(g_get_user_runtime_dir(), "multiwifi", "journals", NULL);
+    }
     self->active_plan = NULL;
     self->is_active = FALSE;
     self->rp_filter_all_modified = FALSE;
@@ -364,10 +370,13 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
         multiwifi_route_journal_save_to_file(journal, journal_path, NULL);
 
         /* 4. Configure Loose Reverse Path Filtering (rp_filter = 2) for multi-path compatibility */
-        if (get_rp_filter(u->ifname) == 1) {
+        u->orig_rp_filter = get_rp_filter(u->ifname);
+        if (u->orig_rp_filter == 1) {
             set_rp_filter(u->ifname, 2);
         }
-        if (get_rp_filter(NULL) == 1) {
+        int cur_all = get_rp_filter(NULL);
+        if (cur_all == 1) {
+            self->orig_rp_filter_all = 1;
             set_rp_filter(NULL, 2);
             self->rp_filter_all_modified = TRUE;
         }
@@ -513,13 +522,13 @@ gboolean multiwifi_routing_manager_teardown(MultiWifiRoutingManager *self,
             if (u->ipv4_address != NULL && *u->ipv4_address != '\0') {
                 multiwifi_netlink_del_rule(nl_fd, u->table_id, u->src_rule_pref, 0, 0, u->ipv4_address, NULL);
             }
-            /* Restore Strict rp_filter if previously adapted */
-            if (get_rp_filter(u->ifname) == 2) {
+            /* Restore original rp_filter only if we previously adapted it from Strict (1) */
+            if (u->orig_rp_filter == 1) {
                 set_rp_filter(u->ifname, 1);
             }
         }
         if (self->rp_filter_all_modified) {
-            set_rp_filter(NULL, 1);
+            set_rp_filter(NULL, self->orig_rp_filter_all);
             self->rp_filter_all_modified = FALSE;
         }
         multiwifi_netlink_close(nl_fd);

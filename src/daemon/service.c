@@ -1234,7 +1234,8 @@ static void multiwifi_daemon_service_init(MultiWifiDaemonService *self)
     self->inventory = multiwifi_inventory_new();
     self->path_monitor = multiwifi_path_monitor_new();
     self->op_manager = multiwifi_op_manager_new();
-    self->routing_mgr = multiwifi_routing_manager_new(NULL);
+    const gchar *jdir = (geteuid() == 0) ? "/run/multiwifi/journals" : NULL;
+    self->routing_mgr = multiwifi_routing_manager_new(jdir);
     multiwifi_routing_manager_recover(self->routing_mgr, NULL);
 
     self->scheduler = multiwifi_scheduler_new(MULTIWIFI_STRATEGY_WEIGHTED_ROUND_ROBIN);

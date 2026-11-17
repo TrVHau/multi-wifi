@@ -67,6 +67,14 @@ void multiwifi_path_info_free(MultiWifiPathInfo *info);
  */
 const gchar *multiwifi_path_state_to_string(MultiWifiPathState state);
 
+/**
+ * multiwifi_path_state_from_string:
+ * @str: String representation of path state
+ *
+ * Returns: Corresponding MultiWifiPathState enum value.
+ */
+MultiWifiPathState multiwifi_path_state_from_string(const gchar *str);
+
 #define MULTIWIFI_TYPE_PATH_MONITOR (multiwifi_path_monitor_get_type())
 G_DECLARE_FINAL_TYPE(MultiWifiPathMonitor, multiwifi_path_monitor, MULTIWIFI, PATH_MONITOR, GObject)
 
@@ -183,6 +191,16 @@ GPtrArray *multiwifi_path_monitor_dup_paths(MultiWifiPathMonitor *self);
  */
 MultiWifiPathInfo *multiwifi_path_monitor_find_path(MultiWifiPathMonitor *self,
                                                     const gchar *ifname);
+
+/**
+ * multiwifi_path_monitor_update_path_info:
+ * @self: Path monitor instance
+ * @info: External path information (e.g. received via D-Bus)
+ *
+ * Updates or inserts a path entry with the given path information.
+ */
+void multiwifi_path_monitor_update_path_info(MultiWifiPathMonitor *self,
+                                             const MultiWifiPathInfo *info);
 
 G_END_DECLS
 

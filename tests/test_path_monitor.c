@@ -171,6 +171,69 @@ static void test_device_disconnect_event(void)
     g_object_unref(mon);
 }
 
+static void test_path_info_update_and_state_strings(void)
+{
+    /* 1. Test string conversion and parsing */
+    g_assert_cmpint(multiwifi_path_state_from_string("Online"), ==, MULTIWIFI_PATH_STATE_ONLINE);
+    g_assert_cmpint(multiwifi_path_state_from_string("Degraded"), ==, MULTIWIFI_PATH_STATE_DEGRADED);
+    g_assert_cmpint(multiwifi_path_state_from_string("Local Only"), ==, MULTIWIFI_PATH_STATE_LOCAL_ONLY);
+    g_assert_cmpint(multiwifi_path_state_from_string("Probing"), ==, MULTIWIFI_PATH_STATE_PROBING);
+    g_assert_cmpint(multiwifi_path_state_from_string("Offline"), ==, MULTIWIFI_PATH_STATE_OFFLINE);
+    g_assert_cmpint(multiwifi_path_state_from_string("Unknown"), ==, MULTIWIFI_PATH_STATE_UNKNOWN);
+    g_assert_cmpint(multiwifi_path_state_from_string("invalid_garbage"), ==, MULTIWIFI_PATH_STATE_UNKNOWN);
+    g_assert_cmpint(multiwifi_path_state_from_string(NULL), ==, MULTIWIFI_PATH_STATE_UNKNOWN);
+
+    /* 2. Test update_path_info on monitor */
+    MultiWifiPathMonitor *mon = multiwifi_path_monitor_new();
+
+    /* Failure path: NULL inputs */
+    multiwifi_path_monitor_update_path_info(NULL, NULL);
+    multiwifi_path_monitor_update_path_info(mon, NULL);
+    MultiWifiPathInfo empty_info = { 0 };
+    multiwifi_path_monitor_update_path_info(mon, &empty_info);
+
+    /* Happy path: Insert new path info */
+    MultiWifiPathInfo info1 = {
+        .ifname = "wlp0s20f0u1",
+        .gateway = "192.168.1.1",
+        .source_ip = "192.168.1.200/24",
+        .state = MULTIWIFI_PATH_STATE_ONLINE,
+        .status_reason = "Healthy path",
+        .rtt_ms = 4.2,
+        .min_rtt_ms = 3.0,
+        .max_rtt_ms = 6.0,
+        .jitter_ms = 0.5,
+        .packet_loss_percent = 0,
+        .is_eligible = TRUE
+    };
+    multiwifi_path_monitor_update_path_info(mon, &info1);
+
+    MultiWifiPathInfo *p1 = multiwifi_path_monitor_find_path(mon, "wlp0s20f0u1");
+    g_assert_nonnull(p1);
+    g_assert_cmpstr(p1->ifname, ==, "wlp0s20f0u1");
+    g_assert_cmpstr(p1->gateway, ==, "192.168.1.1");
+    g_assert_cmpstr(p1->source_ip, ==, "192.168.1.200/24");
+    g_assert_cmpint(p1->state, ==, MULTIWIFI_PATH_STATE_ONLINE);
+    g_assert_cmpfloat(p1->rtt_ms, ==, 4.2);
+    g_assert_true(p1->is_eligible);
+    multiwifi_path_info_free(p1);
+
+    /* Update existing path info */
+    info1.rtt_ms = 12.8;
+    info1.state = MULTIWIFI_PATH_STATE_DEGRADED;
+    info1.status_reason = "Elevated latency";
+    multiwifi_path_monitor_update_path_info(mon, &info1);
+
+    MultiWifiPathInfo *p2 = multiwifi_path_monitor_find_path(mon, "wlp0s20f0u1");
+    g_assert_nonnull(p2);
+    g_assert_cmpint(p2->state, ==, MULTIWIFI_PATH_STATE_DEGRADED);
+    g_assert_cmpfloat(p2->rtt_ms, ==, 12.8);
+    g_assert_cmpstr(p2->status_reason, ==, "Elevated latency");
+    multiwifi_path_info_free(p2);
+
+    g_object_unref(mon);
+}
+
 int main(int argc, char *argv[])
 {
     g_test_init(&argc, &argv, NULL);
@@ -178,6 +241,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/path_monitor/info_lifecycle", test_path_info_lifecycle);
     g_test_add_func("/path_monitor/hysteresis_recovery_and_failure", test_hysteresis_recovery_and_failure);
     g_test_add_func("/path_monitor/device_disconnect_event", test_device_disconnect_event);
+    g_test_add_func("/path_monitor/update_and_state_strings", test_path_info_update_and_state_strings);
 
     return g_test_run();
 }
