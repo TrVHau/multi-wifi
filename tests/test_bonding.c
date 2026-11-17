@@ -447,8 +447,14 @@ static void test_bonding_client_mock_server_handshake(void)
     g_assert_cmpint(multiwifi_bonding_client_get_state(client), ==, MULTIWIFI_BONDING_STATE_CONNECTED);
     g_assert_cmpstr(multiwifi_bonding_client_get_virtual_ip(client), ==, "10.8.0.42");
 
-    /* Forward packet through TUN mock fd -> verify echo */
-    const guint8 test_ip_pkt[] = { 0x45, 0x00, 0x00, 0x14, 0x0A, 0x08, 0x00, 0x2A };
+    /* Forward packet through TUN mock fd -> verify echo (valid 20-byte IPv4 packet: 10.8.0.1 -> 10.8.0.42) */
+    const guint8 test_ip_pkt[] = {
+        0x45, 0x00, 0x00, 0x14,
+        0x12, 0x34, 0x40, 0x00,
+        0x40, 0x06, 0x00, 0x00,
+        0x0A, 0x08, 0x00, 0x01,
+        0x0A, 0x08, 0x00, 0x2A
+    };
     ssize_t w = write(sv[1], test_ip_pkt, sizeof(test_ip_pkt));
     g_assert_cmpint((int)w, ==, (int)sizeof(test_ip_pkt));
 
@@ -460,6 +466,21 @@ static void test_bonding_client_mock_server_handshake(void)
     ssize_t n_echo = read(sv[1], echo_buf, sizeof(echo_buf));
     g_assert_cmpint((int)n_echo, ==, (int)sizeof(test_ip_pkt));
     g_assert_cmpint(memcmp(echo_buf, test_ip_pkt, sizeof(test_ip_pkt)), ==, 0);
+
+    /* Anti-spoofing verification: send spoofed packet (127.0.0.1) -> must be dropped by client */
+    const guint8 spoof_ip_pkt[] = {
+        0x45, 0x00, 0x00, 0x14,
+        0x12, 0x34, 0x40, 0x00,
+        0x40, 0x06, 0x00, 0x00,
+        0x7F, 0x00, 0x00, 0x01,  /* 127.0.0.1 spoofed source */
+        0x0A, 0x08, 0x00, 0x2A
+    };
+    ssize_t sw = write(sv[1], spoof_ip_pkt, sizeof(spoof_ip_pkt));
+    g_assert_cmpint((int)sw, ==, (int)sizeof(spoof_ip_pkt));
+
+    struct pollfd pfd_spoof = { .fd = sv[1], .events = POLLIN, .revents = 0 };
+    int pr_spoof = poll(&pfd_spoof, 1, 200);
+    g_assert_cmpint(pr_spoof, ==, 0); /* Must be rejected by is_valid_inbound_ip_packet */
 
     multiwifi_bonding_client_stop(client);
     g_assert_cmpint(multiwifi_bonding_client_get_state(client), ==, MULTIWIFI_BONDING_STATE_DISCONNECTED);

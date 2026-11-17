@@ -105,6 +105,23 @@ static gboolean send_and_recv_ack(int nl_fd, struct nlmsghdr *nlh, GError **erro
     return TRUE;
 }
 
+static gboolean parse_src_ip_clean(const gchar *src_ip, struct in_addr *out_in)
+{
+    if (src_ip == NULL || *src_ip == '\0') {
+        return FALSE;
+    }
+
+    gchar *clean_ip = g_strdup(src_ip);
+    gchar *slash = strchr(clean_ip, '/');
+    if (slash != NULL) {
+        *slash = '\0';
+    }
+
+    int rc = inet_pton(AF_INET, clean_ip, out_in);
+    g_free(clean_ip);
+    return (rc == 1);
+}
+
 gboolean multiwifi_netlink_add_rule(int nl_fd,
                                     uint32_t table_id,
                                     uint32_t pref,
@@ -149,7 +166,7 @@ gboolean multiwifi_netlink_add_rule(int nl_fd,
 
     if (src_ip != NULL && *src_ip != '\0') {
         struct in_addr in;
-        if (inet_pton(AF_INET, src_ip, &in) == 1) {
+        if (parse_src_ip_clean(src_ip, &in)) {
             frh->src_len = 32;
             add_rtattr(n, sizeof(buf), FRA_SRC, &in, sizeof(in));
         }
@@ -201,7 +218,7 @@ gboolean multiwifi_netlink_del_rule(int nl_fd,
 
     if (src_ip != NULL && *src_ip != '\0') {
         struct in_addr in;
-        if (inet_pton(AF_INET, src_ip, &in) == 1) {
+        if (parse_src_ip_clean(src_ip, &in)) {
             frh->src_len = 32;
             add_rtattr(n, sizeof(buf), FRA_SRC, &in, sizeof(in));
         }

@@ -49,16 +49,18 @@ gboolean multiwifi_firewall_apply(MultiWifiFirewall *self,
     }
 
     GString *rules = g_string_new("");
-    g_string_append(rules, "add table ip " MULTIWIFI_NFT_TABLE_NAME "\n");
-    g_string_append(rules, "flush table ip " MULTIWIFI_NFT_TABLE_NAME "\n");
-    g_string_append(rules, "table ip " MULTIWIFI_NFT_TABLE_NAME " {\n");
+    g_string_append(rules, "add table inet " MULTIWIFI_NFT_TABLE_NAME "\n");
+    g_string_append(rules, "flush table inet " MULTIWIFI_NFT_TABLE_NAME "\n");
+    g_string_append(rules, "table inet " MULTIWIFI_NFT_TABLE_NAME " {\n");
     g_string_append(rules, "    chain output {\n");
     g_string_append(rules, "        type filter hook output priority -150; policy accept;\n");
     g_string_append(rules, "        oif \"lo\" accept\n");
     g_string_append(rules, "        ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255 } accept\n");
+    g_string_append(rules, "        ip6 daddr { ::1, fe80::/10, ff00::/8 } accept\n");
     g_string_append(rules, "        ip daddr { 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12 } udp dport 53 accept\n");
-    g_string_append(rules, "        udp dport { 67, 68 } accept\n");
+    g_string_append(rules, "        udp dport { 67, 68, 546, 547 } accept\n");
     g_string_append(rules, "        meta mark & 0xff00 != 0 accept\n");
+    g_string_append(rules, "        ip6 version 6 drop\n");
 
     if (marks->len == 1) {
         uint32_t single_mark = g_array_index(marks, uint32_t, 0);
@@ -189,9 +191,13 @@ gboolean multiwifi_firewall_teardown(MultiWifiFirewall *self, GError **error)
     nft_ctx_buffer_output(nft);
     nft_ctx_buffer_error(nft);
 
-    const char *cmd = "delete table ip " MULTIWIFI_NFT_TABLE_NAME "\n";
+    const char *cmd = "delete table inet " MULTIWIFI_NFT_TABLE_NAME "\n";
     int rc = nft_run_cmd_from_buffer(nft, cmd);
     if (rc != 0) {
+        /* Also attempt cleaning up legacy table ip if present */
+        const char *legacy_cmd = "delete table ip " MULTIWIFI_NFT_TABLE_NAME "\n";
+        nft_run_cmd_from_buffer(nft, legacy_cmd);
+
         const char *err_msg = nft_ctx_get_error_buffer(nft);
         if (err_msg != NULL && strstr(err_msg, "No such file or directory") != NULL) {
             /* Table was already absent, success */
@@ -237,7 +243,7 @@ gboolean multiwifi_firewall_verify(MultiWifiFirewall *self,
     nft_ctx_buffer_output(nft);
     nft_ctx_buffer_error(nft);
 
-    const char *cmd = "list table ip " MULTIWIFI_NFT_TABLE_NAME "\n";
+    const char *cmd = "list table inet " MULTIWIFI_NFT_TABLE_NAME "\n";
     int rc = nft_run_cmd_from_buffer(nft, cmd);
     if (rc == 0) {
         *exists = TRUE;

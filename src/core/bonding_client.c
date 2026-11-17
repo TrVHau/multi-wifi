@@ -6,6 +6,7 @@
 #include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <fcntl.h>
@@ -147,6 +148,45 @@ void multiwifi_bonding_client_set_tun_device(MultiWifiBondingClient *self,
     g_mutex_unlock(&self->mutex);
 }
 
+static gboolean is_valid_inbound_ip_packet(const guint8 *data, gsize len)
+{
+    if (data == NULL || len < sizeof(struct iphdr)) {
+        return FALSE;
+    }
+
+    const struct iphdr *iph = (const struct iphdr *)data;
+    if (iph->version != 4) {
+        return FALSE;
+    }
+    if (iph->ihl < 5) {
+        return FALSE;
+    }
+
+    size_t total_len = ntohs(iph->tot_len);
+    if (total_len < (size_t)(iph->ihl * 4) || total_len > len) {
+        return FALSE;
+    }
+
+    uint32_t saddr = ntohl(iph->saddr);
+
+    /* Anti-spoofing: reject loopback (127.0.0.0/8) */
+    if ((saddr & 0xFF000000) == 0x7F000000) {
+        return FALSE;
+    }
+
+    /* Anti-spoofing: reject multicast (224.0.0.0/4) */
+    if ((saddr & 0xF0000000) == 0xE0000000) {
+        return FALSE;
+    }
+
+    /* Anti-spoofing: reject broadcast / unspecified */
+    if (saddr == 0xFFFFFFFF || saddr == 0x00000000) {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static gpointer bonding_worker_thread(gpointer user_data)
 {
     MultiWifiBondingClient *self = (MultiWifiBondingClient *)user_data;
@@ -214,10 +254,13 @@ static gpointer bonding_worker_thread(gpointer user_data)
             }
 
             GList *frames = multiwifi_frame_parser_feed(parser, io_buf, (gsize)n_sock, NULL);
+            gboolean got_disconnect = FALSE;
             for (GList *l = frames; l != NULL; l = l->next) {
                 MultiWifiFrame *f = (MultiWifiFrame *)l->data;
                 if (f->type == MULTIWIFI_FRAME_IP_PACKET && f->length > 0) {
-                    multiwifi_tun_device_write(self->tun, f->payload, f->length, NULL);
+                    if (is_valid_inbound_ip_packet(f->payload, f->length)) {
+                        multiwifi_tun_device_write(self->tun, f->payload, f->length, NULL);
+                    }
                 } else if (f->type == MULTIWIFI_FRAME_PING) {
                     /* Echo PONG */
                     uint64_t client_ts = 0;
@@ -229,13 +272,14 @@ static gpointer bonding_worker_thread(gpointer user_data)
                     send(sock_fd, pong->data, pong->len, MSG_NOSIGNAL);
                     g_byte_array_free(pong, TRUE);
                 } else if (f->type == MULTIWIFI_FRAME_DISCONNECT) {
-                    multiwifi_frame_free(f);
-                    g_list_free(frames);
-                    goto thread_exit;
+                    got_disconnect = TRUE;
+                    break;
                 }
-                multiwifi_frame_free(f);
             }
-            g_list_free(frames);
+            g_list_free_full(frames, (GDestroyNotify)multiwifi_frame_free);
+            if (got_disconnect) {
+                goto thread_exit;
+            }
         }
 
         /* 3. Keepalive ping every 3 seconds */
@@ -381,7 +425,10 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
         GList *flist = multiwifi_frame_parser_feed(parser, resp_buf, (gsize)n, NULL);
         if (flist != NULL) {
             resp_frame = (MultiWifiFrame *)flist->data;
-            g_list_free(flist);
+            flist = g_list_remove(flist, resp_frame);
+            if (flist != NULL) {
+                g_list_free_full(flist, (GDestroyNotify)multiwifi_frame_free);
+            }
             break;
         }
     }

@@ -198,11 +198,18 @@ static void multiwifi_window_setup_icons(void)
 
 static gchar *find_daemon_executable(void)
 {
-    gchar *path = g_find_program_in_path("multiwifi-daemon");
-    if (path != NULL) {
-        return path;
+    const gchar *trusted_paths[] = {
+        "/usr/bin/multiwifi-daemon",
+        "/usr/local/bin/multiwifi-daemon",
+        NULL
+    };
+    for (int i = 0; trusted_paths[i] != NULL; i++) {
+        if (g_file_test(trusted_paths[i], G_FILE_TEST_IS_EXECUTABLE)) {
+            return g_strdup(trusted_paths[i]);
+        }
     }
 
+    /* Fallback to alongside executable if running from build directory */
     gchar *exe = g_file_read_link("/proc/self/exe", NULL);
     if (exe != NULL) {
         gchar *dir = g_path_get_dirname(exe);
@@ -215,7 +222,7 @@ static gchar *find_daemon_executable(void)
         g_free(candidate);
     }
 
-    return g_strdup("multiwifi-daemon");
+    return g_strdup("/usr/bin/multiwifi-daemon");
 }
 
 static void wifi_select_dialog_free(WifiSelectDialog *dlg)
@@ -596,10 +603,12 @@ static void update_devices_ui(MultiWifiWindow *self)
         const gchar *hw_icon = is_usb ? "🔌" : "💻";
         const gchar *type_desc = is_usb ? "USB" : "PCIe";
 
+        gchar *escaped_ifname = g_markup_escape_text(info->ifname ? info->ifname : "unknown", -1);
         gchar *title_markup = g_strdup_printf(
             "<span size='medium' weight='bold'>%s %s</span>",
-            hw_icon, info->ifname ? info->ifname : "unknown"
+            hw_icon, escaped_ifname
         );
+        g_free(escaped_ifname);
         GtkWidget *title_lbl = gtk_label_new(NULL);
         gtk_label_set_markup(GTK_LABEL(title_lbl), title_markup);
         gtk_widget_set_halign(title_lbl, GTK_ALIGN_START);
@@ -681,10 +690,12 @@ static void update_devices_ui(MultiWifiWindow *self)
 
             gtk_box_append(GTK_BOX(ssid_box), top_ssid);
 
+            gchar *escaped_ip = g_markup_escape_text(info->ipv4_address ? info->ipv4_address : "Pending", -1);
             gchar *ip_markup = g_strdup_printf(
                 "<span size='small' color='#6c7086'>IP: <tt>%s</tt></span>",
-                info->ipv4_address ? info->ipv4_address : "Pending"
+                escaped_ip
             );
+            g_free(escaped_ip);
             GtkWidget *ip_lbl = gtk_label_new(NULL);
             gtk_label_set_markup(GTK_LABEL(ip_lbl), ip_markup);
             gtk_label_set_xalign(GTK_LABEL(ip_lbl), 0.0f);
@@ -844,7 +855,11 @@ static void update_control_buttons_state(MultiWifiWindow *self)
 
 static void stop_daemon_via_pkexec(MultiWifiWindow *self)
 {
-    const gchar *argv[] = { "pkexec", "pkill", "-TERM", "-x", "multiwifi-daemon", NULL };
+    const gchar *systemctl_bin = g_file_test("/usr/bin/systemctl", G_FILE_TEST_IS_EXECUTABLE) ?
+                                  "/usr/bin/systemctl" : "/bin/systemctl";
+    const gchar *pkexec_bin = g_file_test("/usr/bin/pkexec", G_FILE_TEST_IS_EXECUTABLE) ?
+                              "/usr/bin/pkexec" : "pkexec";
+    const gchar *argv[] = { pkexec_bin, systemctl_bin, "stop", "multiwifi-daemon", NULL };
     GError *spawn_err = NULL;
 
     gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
@@ -854,7 +869,7 @@ static void stop_daemon_via_pkexec(MultiWifiWindow *self)
         NULL,
         (gchar **)argv,
         NULL,
-        G_SPAWN_SEARCH_PATH,
+        0,
         NULL,
         NULL,
         NULL,
@@ -949,7 +964,9 @@ static void start_daemon_via_session(MultiWifiWindow *self)
 static void start_daemon_via_pkexec(MultiWifiWindow *self)
 {
     gchar *daemon_path = find_daemon_executable();
-    const gchar *argv[] = { "pkexec", daemon_path, NULL };
+    const gchar *pkexec_bin = g_file_test("/usr/bin/pkexec", G_FILE_TEST_IS_EXECUTABLE) ?
+                              "/usr/bin/pkexec" : "pkexec";
+    const gchar *argv[] = { pkexec_bin, daemon_path, NULL };
     GError *spawn_err = NULL;
 
     gtk_label_set_markup(GTK_LABEL(self->daemon_banner),
@@ -963,7 +980,7 @@ static void start_daemon_via_pkexec(MultiWifiWindow *self)
         NULL,
         (gchar **)argv,
         NULL,
-        G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD,
+        G_SPAWN_DO_NOT_REAP_CHILD,
         NULL,
         NULL,
         &self->spawned_daemon_pid,

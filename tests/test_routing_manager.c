@@ -227,6 +227,25 @@ static void test_netlink_in_network_namespace(void)
     multiwifi_netlink_verify_rule(nl_fd, 10001, 20001, &exists, NULL);
     g_assert_false(exists);
 
+    /* Test adding and deleting rule with CIDR notation (e.g. 192.168.20.2/24) */
+    ok = multiwifi_netlink_add_rule(nl_fd, 10002, 20002, 0, 0, "192.168.20.2/24", &error);
+    g_assert_no_error(error);
+    g_assert_true(ok);
+
+    exists = FALSE;
+    ok = multiwifi_netlink_verify_rule(nl_fd, 10002, 20002, &exists, &error);
+    g_assert_no_error(error);
+    g_assert_true(ok);
+    g_assert_true(exists);
+
+    ok = multiwifi_netlink_del_rule(nl_fd, 10002, 20002, 0, 0, "192.168.20.2/24", &error);
+    g_assert_no_error(error);
+    g_assert_true(ok);
+
+    exists = TRUE;
+    multiwifi_netlink_verify_rule(nl_fd, 10002, 20002, &exists, NULL);
+    g_assert_false(exists);
+
     multiwifi_netlink_close(nl_fd);
 }
 
