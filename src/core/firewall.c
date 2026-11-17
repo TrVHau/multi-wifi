@@ -234,12 +234,23 @@ gboolean multiwifi_firewall_verify(MultiWifiFirewall *self,
 
     if (rc1 == 0 || rc2 == 0) {
         *exists = TRUE;
-    } else {
-        *exists = FALSE;
+        nft_ctx_free(nft);
+        return TRUE;
     }
 
+    const char *err_msg = nft_ctx_get_error_buffer(nft);
+    if (err_msg != NULL && (strstr(err_msg, "No such file or directory") != NULL ||
+                            strstr(err_msg, "does not exist") != NULL)) {
+        *exists = FALSE;
+        nft_ctx_free(nft);
+        return TRUE;
+    }
+
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                "nftables verify failed (rc=%d): %s",
+                rc1, (err_msg && *err_msg) ? err_msg : "Permission denied or unknown error");
     nft_ctx_free(nft);
-    return TRUE;
+    return FALSE;
 }
 
 gboolean multiwifi_firewall_is_active(MultiWifiFirewall *self)
