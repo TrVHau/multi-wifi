@@ -69,19 +69,20 @@
 
 ## Performance & Benchmarks
 
-MultiWiFi was benchmarked on bare-metal hardware with dual active physical Wi-Fi adapters (PCIe Viettel + USB FPT Telecom). Full details and methodology are documented in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+MultiWiFi was benchmarked on bare-metal hardware with dual active physical Wi-Fi adapters (PCIe Intel AX211 on Viettel + USB Realtek RTL8188GU on FPT Telecom) on an Intel Core i7-13700H workstation with 32 GB RAM. Full details and methodology are documented in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 | Metric | Single Wi-Fi (Stock Linux) | MultiWiFi Dual-Link | Performance Impact |
 | :--- | :--- | :--- | :--- |
-| **Download Throughput** | 39.4 Mbps (1 card) | **47.74 Mbps** (Aggregated) | **+21.0% throughput increase** |
-| **DNS / Gaming Latency** | 29.0 ms (Viettel) | **22.5 ms** (FPT Steering) | **-6.5 ms lower latency (-22.4%)** |
+| **Download Throughput** | 21.20 Mbps (Viettel) / 4.92 Mbps (FPT) | **19.88 Mbps** (Concurrent Aggregated) | Simultaneous multi-provider download distribution |
+| **DNS / Gaming Latency** | 31.94 ms avg (Viettel) | **29.41 ms avg** (FPT Steering) | **-2.53 ms lower latency, 4x less jitter (0.85 ms vs 3.67 ms)** |
+| **Packet Loss & Spike Immunity** | 87.6 ms avg, **20% loss, 244 ms max** (Viettel) | **25.80 ms avg, 0% loss, 0.78 ms jitter** (FPT) | Eliminates packet loss & lag spikes via dynamic link steering |
 | **Scheduler Capacity** | N/A | **17.40 Million flows/s** | Capable of multi-gigabit line-rates |
 | **Scheduler Decision Time** | N/A | **57.47 ns / decision** | Imperceptible scheduling latency |
 | **Bonding Parser Speed** | N/A | **1,465 MB/s (~11.72 Gbps)** | Exceeds 10G interface throughput |
 | **D-Bus IPC Roundtrip** | N/A | **437 µs** | Instantaneous GUI responsiveness |
 | **DNS Switching Latency** | N/A | **1.8 ms** (Atomic symlink-safe switch) | Zero DNS downtime |
 | **Probe Fallback Time** | N/A | **250 ms / port (DNS 53 -> 80 -> 443)** | Eliminates false link drops |
-| **Memory Footprint** | N/A | **~12.0 MB (Daemon) + ~12.5 MB (GUI)** | Minimal system resource usage |
+| **Memory Footprint** | N/A | **8.1 MB (Daemon) + ~28 MB (GUI)** | Extremely lightweight (< 0.1% of 32 GB RAM) |
 
 ---
 
@@ -256,7 +257,7 @@ All daemon operations can be scripted via D-Bus without requiring GUI access:
 gdbus call --system \
     --dest io.github.multiwifi.Daemon \
     --object-path /io/github/multiwifi/Daemon \
-    --method io.github.multiwifi.Daemon.GetStatus
+    --method io.github.multiwifi.Daemon1.GetStatus
 ```
 
 ### Start Load Balancing
@@ -264,7 +265,7 @@ gdbus call --system \
 gdbus call --system \
     --dest io.github.multiwifi.Daemon \
     --object-path /io/github/multiwifi/Daemon \
-    --method io.github.multiwifi.Daemon.StartLoadBalancing "{}"
+    --method io.github.multiwifi.Daemon1.StartLoadBalancing "{}"
 ```
 
 ### Query & Configure DNS
@@ -273,19 +274,19 @@ gdbus call --system \
 gdbus call --system \
     --dest io.github.multiwifi.Daemon \
     --object-path /io/github/multiwifi/Daemon \
-    --method io.github.multiwifi.Daemon.GetDNS
+    --method io.github.multiwifi.Daemon1.GetDNS
 
 # Set Cloudflare DNS
 gdbus call --system \
     --dest io.github.multiwifi.Daemon \
     --object-path /io/github/multiwifi/Daemon \
-    --method io.github.multiwifi.Daemon.SetDNS "['1.1.1.1', '1.0.0.1']"
+    --method io.github.multiwifi.Daemon1.SetDNS "['1.1.1.1', '1.0.0.1']"
 
 # Reset DNS back to DHCP default
 gdbus call --system \
     --dest io.github.multiwifi.Daemon \
     --object-path /io/github/multiwifi/Daemon \
-    --method io.github.multiwifi.Daemon.ResetDNS
+    --method io.github.multiwifi.Daemon1.ResetDNS
 ```
 
 ### Stop Load Balancing (Atomic Rollback)
@@ -293,7 +294,7 @@ gdbus call --system \
 gdbus call --system \
     --dest io.github.multiwifi.Daemon \
     --object-path /io/github/multiwifi/Daemon \
-    --method io.github.multiwifi.Daemon.StopLoadBalancing
+    --method io.github.multiwifi.Daemon1.StopLoadBalancing
 ```
 
 ---

@@ -65,6 +65,7 @@ struct _MultiWifiWindow {
     gboolean daemon_action_pending;
     GPid spawned_daemon_pid;
     guint path_sub_id;
+    guint status_sub_id;
 };
 
 G_DEFINE_TYPE(MultiWifiWindow, multiwifi_window, GTK_TYPE_APPLICATION_WINDOW)
@@ -1522,6 +1523,36 @@ static void on_get_paths_done(GObject *source, GAsyncResult *res, gpointer user_
     }
 }
 
+static void on_dbus_status_signal(GDBusConnection *connection,
+                                  const gchar *sender_name,
+                                  const gchar *object_path,
+                                  const gchar *interface_name,
+                                  const gchar *signal_name,
+                                  GVariant *parameters,
+                                  gpointer user_data)
+{
+    (void)connection;
+    (void)sender_name;
+    (void)object_path;
+    (void)interface_name;
+    (void)signal_name;
+    MultiWifiWindow *self = MULTIWIFI_WINDOW(user_data);
+
+    GVariant *dict = NULL;
+    g_variant_get(parameters, "(@a{sv})", &dict);
+    if (dict != NULL) {
+        GVariant *v_mode = g_variant_lookup_value(dict, "mode", G_VARIANT_TYPE_STRING);
+        if (v_mode != NULL) {
+            const gchar *m = g_variant_get_string(v_mode, NULL);
+            self->lb_active = (g_strcmp0(m, "load_balancing") == 0);
+            self->bonding_active = (g_strcmp0(m, "bonding") == 0);
+            g_variant_unref(v_mode);
+        }
+        g_variant_unref(dict);
+        update_control_buttons_state(self);
+    }
+}
+
 static void on_daemon_name_appeared(GDBusConnection *connection,
                                     const gchar *name,
                                     const gchar *name_owner,
@@ -1551,6 +1582,21 @@ static void on_daemon_name_appeared(GDBusConnection *connection,
             NULL,
             G_DBUS_SIGNAL_FLAGS_NONE,
             on_dbus_path_signal,
+            self,
+            NULL
+        );
+    }
+
+    if (self->status_sub_id == 0 && self->system_bus != NULL) {
+        self->status_sub_id = g_dbus_connection_signal_subscribe(
+            self->system_bus,
+            MULTIWIFI_DBUS_NAME,
+            MULTIWIFI_DBUS_INTERFACE,
+            "StatusChanged",
+            MULTIWIFI_DBUS_PATH,
+            NULL,
+            G_DBUS_SIGNAL_FLAGS_NONE,
+            on_dbus_status_signal,
             self,
             NULL
         );
@@ -1609,6 +1655,13 @@ static void on_daemon_name_vanished(GDBusConnection *connection,
             g_dbus_connection_signal_unsubscribe(self->system_bus, self->path_sub_id);
         }
         self->path_sub_id = 0;
+    }
+
+    if (self->status_sub_id > 0) {
+        if (self->system_bus != NULL) {
+            g_dbus_connection_signal_unsubscribe(self->system_bus, self->status_sub_id);
+        }
+        self->status_sub_id = 0;
     }
 
     /* Resume local standalone socket probes when daemon is offline */
@@ -2238,6 +2291,13 @@ static void multiwifi_window_dispose(GObject *object)
             g_dbus_connection_signal_unsubscribe(self->system_bus, self->path_sub_id);
         }
         self->path_sub_id = 0;
+    }
+
+    if (self->status_sub_id > 0) {
+        if (self->system_bus != NULL) {
+            g_dbus_connection_signal_unsubscribe(self->system_bus, self->status_sub_id);
+        }
+        self->status_sub_id = 0;
     }
 
     if (self->bus_watcher_id > 0) {

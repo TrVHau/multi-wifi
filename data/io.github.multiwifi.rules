@@ -1,11 +1,11 @@
 // MultiWiFi PolicyKit rules
-// Permits local active console administrators (wheel/sudo) to manage uplinks
+// Permits local administrators (wheel/sudo) to manage uplinks
 polkit.addRule(function(action, subject) {
     if (action.id == "io.github.multiwifi.modify") {
+        if (subject.isInGroup("wheel") || subject.isInGroup("sudo")) {
+            return polkit.Result.YES;
+        }
         if (subject.local && subject.active) {
-            if (subject.isInGroup("wheel") || subject.isInGroup("sudo")) {
-                return polkit.Result.YES;
-            }
             return polkit.Result.AUTH_ADMIN_KEEP;
         }
     }
