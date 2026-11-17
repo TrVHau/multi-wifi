@@ -2,6 +2,10 @@
 #include "multiwifi/core/logging.h"
 #include <NetworkManager.h>
 #include <net/if.h>
+#include <stdio.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 enum {
     SIGNAL_DEVICES_CHANGED,
@@ -74,6 +78,66 @@ MultiWifiInventory *multiwifi_inventory_new(void)
     return g_object_new(MULTIWIFI_TYPE_INVENTORY, NULL);
 }
 
+static void get_kernel_ipv4_for_iface(const gchar *ifname, gchar **out_addr, gchar **out_gw)
+{
+    if (ifname == NULL || *ifname == '\0') {
+        return;
+    }
+
+    if (out_addr != NULL && *out_addr == NULL) {
+        struct ifaddrs *ifaddr = NULL;
+        if (getifaddrs(&ifaddr) == 0 && ifaddr != NULL) {
+            for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                if (ifa->ifa_addr == NULL || ifa->ifa_name == NULL) {
+                    continue;
+                }
+                if (g_strcmp0(ifa->ifa_name, ifname) == 0 && ifa->ifa_addr->sa_family == AF_INET) {
+                    struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+                    struct sockaddr_in *netmask = (struct sockaddr_in *)ifa->ifa_netmask;
+                    char ip_buf[INET_ADDRSTRLEN];
+                    if (inet_ntop(AF_INET, &sin->sin_addr, ip_buf, sizeof(ip_buf)) != NULL) {
+                        uint32_t mask = netmask ? ntohl(netmask->sin_addr.s_addr) : 0;
+                        int prefix = 0;
+                        while (mask > 0) {
+                            if (mask & 0x80000000) prefix++;
+                            mask <<= 1;
+                        }
+                        if (prefix == 0) prefix = 24;
+                        *out_addr = g_strdup_printf("%s/%d", ip_buf, prefix);
+                        break;
+                    }
+                }
+            }
+            freeifaddrs(ifaddr);
+        }
+    }
+
+    if (out_gw != NULL && *out_gw == NULL) {
+        FILE *f = fopen("/proc/net/route", "r");
+        if (f != NULL) {
+            char line[256];
+            if (fgets(line, sizeof(line), f) != NULL) {
+                while (fgets(line, sizeof(line), f) != NULL) {
+                    char dev[64];
+                    unsigned long dest = 0, gw = 0, flags = 0;
+                    if (sscanf(line, "%63s %lx %lx %lx", dev, &dest, &gw, &flags) == 4) {
+                        if (g_strcmp0(dev, ifname) == 0 && dest == 0 && (flags & 0x2)) {
+                            struct in_addr gw_in;
+                            gw_in.s_addr = (in_addr_t)gw;
+                            char gw_buf[INET_ADDRSTRLEN];
+                            if (inet_ntop(AF_INET, &gw_in, gw_buf, sizeof(gw_buf)) != NULL) {
+                                *out_gw = g_strdup(gw_buf);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            fclose(f);
+        }
+    }
+}
+
 static MultiWifiDeviceInfo *extract_wifi_device_info(NMDeviceWifi *wifi_dev)
 {
     NMDevice *dev = NM_DEVICE(wifi_dev);
@@ -125,6 +189,11 @@ static MultiWifiDeviceInfo *extract_wifi_device_info(NMDeviceWifi *wifi_dev)
                 nm_ip_address_get_prefix(addr)
             );
         }
+    }
+
+    /* Authoritative kernel fallback if libnm has not yet populated IPv4 address or Gateway */
+    if (info->ifname != NULL && (info->ipv4_address == NULL || info->ipv4_gateway == NULL)) {
+        get_kernel_ipv4_for_iface(info->ifname, &info->ipv4_address, &info->ipv4_gateway);
     }
 
     /* IPv6 Configuration */
@@ -192,6 +261,12 @@ static void watch_device_signals(MultiWifiInventory *self, NMDevice *dev)
     g_signal_connect_object(dev, "notify::ip4-config",
                             G_CALLBACK(on_device_notify), self, 0);
     g_signal_connect_object(dev, "notify::ip6-config",
+                            G_CALLBACK(on_device_notify), self, 0);
+    g_signal_connect_object(dev, "notify::active-connection",
+                            G_CALLBACK(on_device_notify), self, 0);
+    g_signal_connect_object(dev, "notify::dhcp4-config",
+                            G_CALLBACK(on_device_notify), self, 0);
+    g_signal_connect_object(dev, "notify::state",
                             G_CALLBACK(on_device_notify), self, 0);
 }
 
@@ -348,6 +423,16 @@ GPtrArray *multiwifi_inventory_dup_devices(MultiWifiInventory *self)
     g_mutex_unlock(&self->mutex);
 
     return dup;
+}
+
+void multiwifi_inventory_refresh(MultiWifiInventory *self)
+{
+    if (self == NULL) {
+        return;
+    }
+    g_mutex_lock(&self->mutex);
+    multiwifi_inventory_refresh_locked(self);
+    g_mutex_unlock(&self->mutex);
 }
 
 MultiWifiDeviceInfo *multiwifi_inventory_find_device(MultiWifiInventory *self, const gchar *ifname)

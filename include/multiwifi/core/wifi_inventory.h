@@ -50,6 +50,14 @@ gboolean multiwifi_inventory_is_running(MultiWifiInventory *self);
 GPtrArray *multiwifi_inventory_dup_devices(MultiWifiInventory *self);
 
 /**
+ * multiwifi_inventory_refresh:
+ * @self: MultiWifiInventory instance
+ *
+ * Forces an immediate synchronous refresh of the cached device inventory.
+ */
+void multiwifi_inventory_refresh(MultiWifiInventory *self);
+
+/**
  * multiwifi_inventory_find_device:
  * @self: MultiWifiInventory instance
  * @ifname: Interface name, e.g. "wlp0s20f0u1"

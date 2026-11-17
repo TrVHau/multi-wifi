@@ -9,6 +9,8 @@
 #include "multiwifi/version.h"
 #include <polkit/polkit.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <ifaddrs.h>
 #include <glib/gstdio.h>
 #include <string.h>
 
@@ -127,6 +129,12 @@ static gboolean check_polkit_auth(MultiWifiDaemonService *self,
         return TRUE;
     }
 
+    if (self->bus_type != G_BUS_TYPE_SYSTEM) {
+        g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED,
+                    "Polkit authorization requires the system bus");
+        return FALSE;
+    }
+
     const gchar *sender = g_dbus_method_invocation_get_sender(invocation);
     if (sender == NULL) {
         g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED, "Caller has no D-Bus sender identity");
@@ -230,6 +238,68 @@ static gboolean on_stop_daemon_idle(gpointer user_data)
     (void)user_data;
     raise(SIGTERM);
     return G_SOURCE_REMOVE;
+}
+
+static void get_kernel_ipv4_for_iface(const gchar *ifname, gchar **out_addr, gchar **out_gw)
+{
+    if (ifname == NULL || *ifname == '\0') {
+        return;
+    }
+
+    if (out_addr != NULL && (*out_addr == NULL || **out_addr == '\0')) {
+        struct ifaddrs *ifaddr = NULL;
+        if (getifaddrs(&ifaddr) == 0 && ifaddr != NULL) {
+            for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                if (ifa->ifa_addr == NULL || ifa->ifa_name == NULL) {
+                    continue;
+                }
+                if (g_strcmp0(ifa->ifa_name, ifname) == 0 && ifa->ifa_addr->sa_family == AF_INET) {
+                    struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+                    struct sockaddr_in *netmask = (struct sockaddr_in *)ifa->ifa_netmask;
+                    char ip_buf[INET_ADDRSTRLEN];
+                    if (inet_ntop(AF_INET, &sin->sin_addr, ip_buf, sizeof(ip_buf)) != NULL) {
+                        uint32_t mask = netmask ? ntohl(netmask->sin_addr.s_addr) : 0;
+                        int prefix = 0;
+                        while (mask > 0) {
+                            if (mask & 0x80000000) prefix++;
+                            mask <<= 1;
+                        }
+                        if (prefix == 0) prefix = 24;
+                        g_free(*out_addr);
+                        *out_addr = g_strdup_printf("%s/%d", ip_buf, prefix);
+                        break;
+                    }
+                }
+            }
+            freeifaddrs(ifaddr);
+        }
+    }
+
+    if (out_gw != NULL && (*out_gw == NULL || **out_gw == '\0')) {
+        FILE *f = fopen("/proc/net/route", "r");
+        if (f != NULL) {
+            char line[256];
+            if (fgets(line, sizeof(line), f) != NULL) {
+                while (fgets(line, sizeof(line), f) != NULL) {
+                    char dev[64];
+                    unsigned long dest = 0, gw = 0, flags = 0;
+                    if (sscanf(line, "%63s %lx %lx %lx", dev, &dest, &gw, &flags) == 4) {
+                        if (g_strcmp0(dev, ifname) == 0 && dest == 0 && (flags & 0x2)) {
+                            struct in_addr gw_in;
+                            gw_in.s_addr = (in_addr_t)gw;
+                            char gw_buf[INET_ADDRSTRLEN];
+                            if (inet_ntop(AF_INET, &gw_in, gw_buf, sizeof(gw_buf)) != NULL) {
+                                g_free(*out_gw);
+                                *out_gw = g_strdup(gw_buf);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            fclose(f);
+        }
+    }
 }
 
 static gchar *get_dns_nm_conf_path(void)
@@ -427,10 +497,17 @@ static void handle_method_call(GDBusConnection *connection,
         GVariantBuilder b;
         g_variant_builder_init(&b, G_VARIANT_TYPE("aa{sv}"));
 
+        multiwifi_inventory_refresh(self->inventory);
         GPtrArray *devices = multiwifi_inventory_dup_devices(self->inventory);
         if (devices != NULL) {
             for (guint i = 0; i < devices->len; i++) {
                 MultiWifiDeviceInfo *d = g_ptr_array_index(devices, i);
+                if (d->state == MULTIWIFI_DEVICE_STATE_CONNECTED) {
+                    if (d->ipv4_address == NULL || *d->ipv4_address == '\0' ||
+                        d->ipv4_gateway == NULL || *d->ipv4_gateway == '\0') {
+                        get_kernel_ipv4_for_iface(d->ifname, &d->ipv4_address, &d->ipv4_gateway);
+                    }
+                }
                 g_variant_builder_add_value(&b, device_to_variant_dict(d));
             }
             g_ptr_array_unref(devices);
@@ -501,6 +578,7 @@ static void handle_method_call(GDBusConnection *connection,
         }
 
         gchar *op_id = multiwifi_op_manager_create_op(self->op_manager, "StartLoadBalancing");
+        multiwifi_inventory_refresh(self->inventory);
         GPtrArray *devs = multiwifi_inventory_dup_devices(self->inventory);
         MultiWifiRoutePlan *plan = multiwifi_route_plan_new();
 
@@ -508,6 +586,12 @@ static void handle_method_call(GDBusConnection *connection,
             uint32_t idx = 0;
             for (guint i = 0; i < devs->len; i++) {
                 MultiWifiDeviceInfo *d = g_ptr_array_index(devs, i);
+                if (d->state == MULTIWIFI_DEVICE_STATE_CONNECTED) {
+                    if (d->ipv4_address == NULL || *d->ipv4_address == '\0' ||
+                        d->ipv4_gateway == NULL || *d->ipv4_gateway == '\0') {
+                        get_kernel_ipv4_for_iface(d->ifname, &d->ipv4_address, &d->ipv4_gateway);
+                    }
+                }
                 if (d->state == MULTIWIFI_DEVICE_STATE_CONNECTED &&
                     d->ipv4_address != NULL && *d->ipv4_address != '\0' &&
                     d->ipv4_gateway != NULL && *d->ipv4_gateway != '\0') {
@@ -1001,6 +1085,12 @@ static void on_inventory_forward(MultiWifiInventory *inv, gpointer user_data)
         if (devs != NULL) {
             for (guint i = 0; i < devs->len; i++) {
                 MultiWifiDeviceInfo *d = g_ptr_array_index(devs, i);
+                if (d->state == MULTIWIFI_DEVICE_STATE_CONNECTED) {
+                    if (d->ipv4_address == NULL || *d->ipv4_address == '\0' ||
+                        d->ipv4_gateway == NULL || *d->ipv4_gateway == '\0') {
+                        get_kernel_ipv4_for_iface(d->ifname, &d->ipv4_address, &d->ipv4_gateway);
+                    }
+                }
                 multiwifi_path_monitor_update_device(self->path_monitor, d);
 
                 GVariant *dict = device_to_variant_dict(d);
