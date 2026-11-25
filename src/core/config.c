@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 
 G_DEFINE_QUARK(multiwifi-config-error-quark, multiwifi_config_error)
 
@@ -77,6 +78,33 @@ static gboolean is_valid_identifier(const gchar *str)
             return FALSE;
         }
     }
+    return TRUE;
+}
+
+static gboolean parse_uint_strict(const gchar *val,
+                                  const gchar *field_name,
+                                  gsize line_no,
+                                  guint *out_val,
+                                  GError **error)
+{
+    if (val == NULL || *val == '\0' || !g_ascii_isdigit((guchar)*val)) {
+        g_set_error(error, MULTIWIFI_CONFIG_ERROR, MULTIWIFI_CONFIG_ERROR_VALIDATION,
+                    "Invalid unsigned integer '%s' for '%s' at line %zu",
+                    val ? val : "", field_name, line_no);
+        return FALSE;
+    }
+
+    gchar *endptr = NULL;
+    errno = 0;
+    guint64 parsed = g_ascii_strtoull(val, &endptr, 10);
+    if (errno == ERANGE || endptr == NULL || *endptr != '\0' || parsed > G_MAXUINT) {
+        g_set_error(error, MULTIWIFI_CONFIG_ERROR, MULTIWIFI_CONFIG_ERROR_VALIDATION,
+                    "Out-of-range or malformed integer '%s' for '%s' at line %zu",
+                    val, field_name, line_no);
+        return FALSE;
+    }
+
+    *out_val = (guint)parsed;
     return TRUE;
 }
 
@@ -261,9 +289,10 @@ MultiWifiConfig *multiwifi_config_parse_string(const gchar *text, GError **error
         gchar *key = g_strstrip(g_strdup(kv[0]));
         gchar *val = strip_quotes(kv[1]);
 
+        gboolean kv_ok = TRUE;
         if (section == SECTION_ROOT) {
             if (g_strcmp0(key, "schema_version") == 0) {
-                cfg->schema_version = (guint)g_ascii_strtoull(val, NULL, 10);
+                kv_ok = parse_uint_strict(val, "schema_version", i + 1, &cfg->schema_version, error);
             } else if (g_strcmp0(key, "mode") == 0) {
                 if (g_strcmp0(val, "load_balance") == 0) {
                     cfg->mode = MULTIWIFI_MODE_LOAD_BALANCE;
@@ -274,13 +303,7 @@ MultiWifiConfig *multiwifi_config_parse_string(const gchar *text, GError **error
                 } else {
                     g_set_error(error, MULTIWIFI_CONFIG_ERROR, MULTIWIFI_CONFIG_ERROR_VALIDATION,
                                 "Unknown mode '%s' at line %zu", val, i + 1);
-                    g_free(key);
-                    g_free(val);
-                    g_strfreev(kv);
-                    g_free(line);
-                    g_strfreev(lines);
-                    multiwifi_config_free(cfg);
-                    return NULL;
+                    kv_ok = FALSE;
                 }
             }
         } else if (section == SECTION_LOAD_BALANCE) {
@@ -290,22 +313,20 @@ MultiWifiConfig *multiwifi_config_parse_string(const gchar *text, GError **error
                 } else {
                     g_set_error(error, MULTIWIFI_CONFIG_ERROR, MULTIWIFI_CONFIG_ERROR_VALIDATION,
                                 "Unknown load balance strategy '%s' at line %zu", val, i + 1);
-                    g_free(key);
-                    g_free(val);
-                    g_strfreev(kv);
-                    g_free(line);
-                    g_strfreev(lines);
-                    multiwifi_config_free(cfg);
-                    return NULL;
+                    kv_ok = FALSE;
                 }
             } else if (g_strcmp0(key, "health_check_interval_ms") == 0) {
-                cfg->load_balance.health_check_interval_ms = (guint)g_ascii_strtoull(val, NULL, 10);
+                kv_ok = parse_uint_strict(val, "health_check_interval_ms", i + 1,
+                                          &cfg->load_balance.health_check_interval_ms, error);
             } else if (g_strcmp0(key, "failure_threshold") == 0) {
-                cfg->load_balance.failure_threshold = (guint)g_ascii_strtoull(val, NULL, 10);
+                kv_ok = parse_uint_strict(val, "failure_threshold", i + 1,
+                                          &cfg->load_balance.failure_threshold, error);
             } else if (g_strcmp0(key, "recovery_threshold") == 0) {
-                cfg->load_balance.recovery_threshold = (guint)g_ascii_strtoull(val, NULL, 10);
+                kv_ok = parse_uint_strict(val, "recovery_threshold", i + 1,
+                                          &cfg->load_balance.recovery_threshold, error);
             } else if (g_strcmp0(key, "cooldown_ms") == 0) {
-                cfg->load_balance.cooldown_ms = (guint)g_ascii_strtoull(val, NULL, 10);
+                kv_ok = parse_uint_strict(val, "cooldown_ms", i + 1,
+                                          &cfg->load_balance.cooldown_ms, error);
             }
         } else if (section == SECTION_UPLINKS) {
             if (current_uplink != NULL) {
@@ -315,7 +336,8 @@ MultiWifiConfig *multiwifi_config_parse_string(const gchar *text, GError **error
                 } else if (g_strcmp0(key, "enabled") == 0) {
                     current_uplink->enabled = (g_ascii_strcasecmp(val, "true") == 0 || g_strcmp0(val, "1") == 0);
                 } else if (g_strcmp0(key, "weight") == 0) {
-                    current_uplink->weight = (guint)g_ascii_strtoull(val, NULL, 10);
+                    kv_ok = parse_uint_strict(val, "weight", i + 1,
+                                              &current_uplink->weight, error);
                 }
             }
         } else if (section == SECTION_BONDING) {
@@ -331,6 +353,12 @@ MultiWifiConfig *multiwifi_config_parse_string(const gchar *text, GError **error
         g_free(val);
         g_strfreev(kv);
         g_free(line);
+
+        if (!kv_ok) {
+            g_strfreev(lines);
+            multiwifi_config_free(cfg);
+            return NULL;
+        }
     }
 
     g_strfreev(lines);

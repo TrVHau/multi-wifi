@@ -39,6 +39,7 @@ struct _MultiWifiBondingClient {
     GThread *worker;
     gboolean running;
     GMutex mutex;
+    GMutex send_mutex;
 };
 
 const gchar *multiwifi_bonding_client_state_to_string(MultiWifiBondingState state)
@@ -70,6 +71,7 @@ MultiWifiBondingClient *multiwifi_bonding_client_new(void)
     self->running = FALSE;
     self->server_mtu = MULTIWIFI_DEFAULT_TUN_MTU;
     g_mutex_init(&self->mutex);
+    g_mutex_init(&self->send_mutex);
     return self;
 }
 
@@ -79,6 +81,7 @@ void multiwifi_bonding_client_free(MultiWifiBondingClient *self)
         return;
     }
     multiwifi_bonding_client_stop(self);
+    g_mutex_clear(&self->send_mutex);
     g_mutex_clear(&self->mutex);
 
     g_free(self->profile_id);
@@ -141,11 +144,63 @@ void multiwifi_bonding_client_set_tun_device(MultiWifiBondingClient *self,
         return;
     }
     g_mutex_lock(&self->mutex);
+    if (self->running) {
+        g_warning("Cannot replace TUN device while bonding client is active");
+        g_mutex_unlock(&self->mutex);
+        return;
+    }
     if (self->tun != NULL) {
         multiwifi_tun_device_free(self->tun);
     }
     self->tun = tun;
     g_mutex_unlock(&self->mutex);
+}
+
+static gboolean send_all_nonblock(int fd, GMutex *send_mutex, const guint8 *data, gsize len, gint timeout_ms)
+{
+    if (fd < 0 || data == NULL) {
+        return FALSE;
+    }
+    if (len == 0) {
+        return TRUE;
+    }
+
+    gint64 deadline_us = g_get_monotonic_time() + ((gint64)timeout_ms * 1000);
+    gsize total = 0;
+
+    g_mutex_lock(send_mutex);
+    while (total < len) {
+        ssize_t n = send(fd, data + total, len - total, MSG_NOSIGNAL);
+        if (n > 0) {
+            total += (gsize)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            gint64 rem_us = deadline_us - g_get_monotonic_time();
+            if (rem_us <= 0) {
+                g_mutex_unlock(send_mutex);
+                return FALSE;
+            }
+            struct pollfd pfd = { .fd = fd, .events = POLLOUT, .revents = 0 };
+            int wait_ms = (int)MIN(rem_us / 1000 + 1, 200);
+            int prc = poll(&pfd, 1, wait_ms);
+            if (prc < 0 && errno == EINTR) {
+                continue;
+            }
+            if (prc <= 0 || (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+                g_mutex_unlock(send_mutex);
+                return FALSE;
+            }
+            continue;
+        }
+        g_mutex_unlock(send_mutex);
+        return FALSE;
+    }
+    g_mutex_unlock(send_mutex);
+    return TRUE;
 }
 
 static gboolean is_valid_inbound_ip_packet(const guint8 *data, gsize len)
@@ -239,17 +294,25 @@ static gpointer bonding_worker_thread(gpointer user_data)
             gssize n_read = multiwifi_tun_device_read(self->tun, io_buf, sizeof(io_buf), NULL);
             if (n_read > 0) {
                 GByteArray *frame_bytes = multiwifi_frame_encode_ip(seq++, io_buf, (uint32_t)n_read);
-                ssize_t sent = send(sock_fd, frame_bytes->data, frame_bytes->len, MSG_NOSIGNAL);
-                (void)sent;
+                gboolean ok = send_all_nonblock(sock_fd, &self->send_mutex, frame_bytes->data, frame_bytes->len, 1500);
                 g_byte_array_free(frame_bytes, TRUE);
+                if (!ok) {
+                    break;
+                }
             }
         }
 
         /* 2. Socket readable -> parse frame and forward to TUN */
         if (fds[1].revents & POLLIN) {
             ssize_t n_sock = recv(sock_fd, io_buf, sizeof(io_buf), 0);
-            if (n_sock <= 0) {
+            if (n_sock == 0) {
                 /* Server closed connection */
+                break;
+            }
+            if (n_sock < 0) {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+                    continue;
+                }
                 break;
             }
 
@@ -269,8 +332,12 @@ static gpointer bonding_worker_thread(gpointer user_data)
                         client_ts = GUINT64_FROM_BE(client_ts);
                     }
                     GByteArray *pong = multiwifi_frame_encode_pong(seq++, client_ts, (uint64_t)g_get_monotonic_time());
-                    send(sock_fd, pong->data, pong->len, MSG_NOSIGNAL);
+                    gboolean ok = send_all_nonblock(sock_fd, &self->send_mutex, pong->data, pong->len, 1500);
                     g_byte_array_free(pong, TRUE);
+                    if (!ok) {
+                        got_disconnect = TRUE;
+                        break;
+                    }
                 } else if (f->type == MULTIWIFI_FRAME_DISCONNECT) {
                     got_disconnect = TRUE;
                     break;
@@ -287,8 +354,11 @@ static gpointer bonding_worker_thread(gpointer user_data)
         if (now_us - last_ping_us >= 3000000) {
             last_ping_us = now_us;
             GByteArray *ping = multiwifi_frame_encode_ping(seq++, (uint64_t)now_us);
-            send(sock_fd, ping->data, ping->len, MSG_NOSIGNAL);
+            gboolean ok = send_all_nonblock(sock_fd, &self->send_mutex, ping->data, ping->len, 1500);
             g_byte_array_free(ping, TRUE);
+            if (!ok) {
+                break;
+            }
         }
     }
 
@@ -305,6 +375,18 @@ thread_exit:
     return NULL;
 }
 
+static void cleanup_failed_start_locked(MultiWifiBondingClient *self)
+{
+    if (self->sock_fd >= 0) {
+        close(self->sock_fd);
+        self->sock_fd = -1;
+    }
+    if (self->loop_prev != NULL) {
+        multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
+    }
+    self->state = MULTIWIFI_BONDING_STATE_FAILED;
+}
+
 gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **error)
 {
     if (self == NULL) {
@@ -313,6 +395,30 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
     }
 
     g_mutex_lock(&self->mutex);
+
+    if (self->running) {
+        g_mutex_unlock(&self->mutex);
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_BUSY, "Bonding client is already running");
+        return FALSE;
+    }
+
+    if (self->worker != NULL) {
+        GThread *stale_w = self->worker;
+        self->worker = NULL;
+        g_mutex_unlock(&self->mutex);
+        g_thread_join(stale_w);
+        g_mutex_lock(&self->mutex);
+        if (self->running) {
+            g_mutex_unlock(&self->mutex);
+            g_set_error(error, G_IO_ERROR, G_IO_ERROR_BUSY, "Bonding client is already running");
+            return FALSE;
+        }
+    }
+
+    if (self->sock_fd >= 0) {
+        close(self->sock_fd);
+        self->sock_fd = -1;
+    }
 
     if (self->server_host == NULL || *self->server_host == '\0' || self->server_port == 0) {
         g_mutex_unlock(&self->mutex);
@@ -342,34 +448,48 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
     }
 
     char resolved_ip[INET_ADDRSTRLEN] = { 0 };
-    struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-    inet_ntop(AF_INET, &sin->sin_addr, resolved_ip, sizeof(resolved_ip));
+    const struct sockaddr_in *sin = (const struct sockaddr_in *)res->ai_addr;
+    if (inet_ntop(AF_INET, &sin->sin_addr, resolved_ip, sizeof(resolved_ip)) == NULL) {
+        freeaddrinfo(res);
+        self->state = MULTIWIFI_BONDING_STATE_FAILED;
+        g_mutex_unlock(&self->mutex);
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Resolved server address is invalid");
+        return FALSE;
+    }
 
-    /* Apply loop-prevention host route if physical uplink parameters configured */
-    if (self->physical_ifname != NULL && self->physical_gw != NULL) {
+    /* Apply loop-prevention host route only for non-loopback targets */
+    uint32_t addr_host = ntohl(sin->sin_addr.s_addr);
+    gboolean is_loopback = ((addr_host & 0xFF000000U) == 0x7F000000U);
+    if (self->physical_ifname != NULL && self->physical_gw != NULL && !is_loopback) {
         if (self->loop_prev != NULL) {
+            multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
             multiwifi_loop_prevention_free(self->loop_prev);
         }
         self->loop_prev = multiwifi_loop_prevention_new(
             resolved_ip, self->physical_gw, self->physical_ifname, 10
         );
         multiwifi_loop_prevention_apply(self->loop_prev, NULL);
+    } else if (self->loop_prev != NULL) {
+        multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
+        multiwifi_loop_prevention_free(self->loop_prev);
+        self->loop_prev = NULL;
     }
 
     /* Socket creation: try MPTCP first, fall back to TCP */
-    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_MPTCP);
+    int sock = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_MPTCP);
     if (sock >= 0) {
         self->is_mptcp = TRUE;
     } else {
         self->is_mptcp = FALSE;
-        sock = socket(AF_INET, SOCK_STREAM, 0);
+        sock = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     }
 
     if (sock < 0) {
+        int err = errno;
         freeaddrinfo(res);
-        self->state = MULTIWIFI_BONDING_STATE_FAILED;
+        cleanup_failed_start_locked(self);
         g_mutex_unlock(&self->mutex);
-        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Socket creation failed: %s", g_strerror(errno));
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Socket creation failed: %s", g_strerror(err));
         return FALSE;
     }
 
@@ -382,10 +502,7 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
         int err = errno;
         close(sock);
         freeaddrinfo(res);
-        if (self->loop_prev != NULL) {
-            multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
-        }
-        self->state = MULTIWIFI_BONDING_STATE_FAILED;
+        cleanup_failed_start_locked(self);
         g_mutex_unlock(&self->mutex);
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
                     "Failed to connect to %s:%u: %s", resolved_ip, self->server_port, g_strerror(err));
@@ -397,16 +514,24 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
     /* Handshake */
     self->state = MULTIWIFI_BONDING_STATE_AUTHENTICATING;
     GByteArray *auth_req = multiwifi_frame_encode_auth_req(1, self->profile_id, self->auth_token);
-    ssize_t sent = send(self->sock_fd, auth_req->data, auth_req->len, 0);
+    gboolean req_sent = TRUE;
+    gsize total_req = 0;
+    while (total_req < auth_req->len) {
+        ssize_t n = send(self->sock_fd, auth_req->data + total_req, auth_req->len - total_req, MSG_NOSIGNAL);
+        if (n > 0) {
+            total_req += (gsize)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        req_sent = FALSE;
+        break;
+    }
     g_byte_array_free(auth_req, TRUE);
 
-    if (sent < 0) {
-        close(self->sock_fd);
-        self->sock_fd = -1;
-        if (self->loop_prev != NULL) {
-            multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
-        }
-        self->state = MULTIWIFI_BONDING_STATE_FAILED;
+    if (!req_sent) {
+        cleanup_failed_start_locked(self);
         g_mutex_unlock(&self->mutex);
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to send auth request to server");
         return FALSE;
@@ -419,6 +544,9 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
 
     while (TRUE) {
         ssize_t n = recv(self->sock_fd, resp_buf, sizeof(resp_buf), 0);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
         if (n <= 0) {
             break;
         }
@@ -435,12 +563,7 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
     multiwifi_frame_parser_free(parser);
 
     if (resp_frame == NULL) {
-        close(self->sock_fd);
-        self->sock_fd = -1;
-        if (self->loop_prev != NULL) {
-            multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
-        }
-        self->state = MULTIWIFI_BONDING_STATE_FAILED;
+        cleanup_failed_start_locked(self);
         g_mutex_unlock(&self->mutex);
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Timeout or no response to auth request");
         return FALSE;
@@ -458,23 +581,13 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
     multiwifi_frame_free(resp_frame);
 
     if (!decoded) {
-        close(self->sock_fd);
-        self->sock_fd = -1;
-        if (self->loop_prev != NULL) {
-            multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
-        }
-        self->state = MULTIWIFI_BONDING_STATE_FAILED;
+        cleanup_failed_start_locked(self);
         g_mutex_unlock(&self->mutex);
         return FALSE;
     }
 
     if (auth_status != MULTIWIFI_AUTH_STATUS_OK) {
-        close(self->sock_fd);
-        self->sock_fd = -1;
-        if (self->loop_prev != NULL) {
-            multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
-        }
-        self->state = MULTIWIFI_BONDING_STATE_FAILED;
+        cleanup_failed_start_locked(self);
         g_mutex_unlock(&self->mutex);
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
                     "Server rejected authentication (code=%u): %s",
@@ -498,12 +611,7 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
     }
     if (!multiwifi_tun_device_is_open(self->tun)) {
         if (!multiwifi_tun_device_open(self->tun, error)) {
-            close(self->sock_fd);
-            self->sock_fd = -1;
-            if (self->loop_prev != NULL) {
-                multiwifi_loop_prevention_rollback(self->loop_prev, NULL);
-            }
-            self->state = MULTIWIFI_BONDING_STATE_FAILED;
+            cleanup_failed_start_locked(self);
             g_mutex_unlock(&self->mutex);
             return FALSE;
         }
@@ -513,7 +621,14 @@ gboolean multiwifi_bonding_client_start(MultiWifiBondingClient *self, GError **e
 
     /* Set non-blocking I/O on socket for worker */
     int fflags = fcntl(self->sock_fd, F_GETFL, 0);
-    fcntl(self->sock_fd, F_SETFL, fflags | O_NONBLOCK);
+    if (fflags < 0 || fcntl(self->sock_fd, F_SETFL, fflags | O_NONBLOCK) < 0) {
+        int err = errno;
+        cleanup_failed_start_locked(self);
+        g_mutex_unlock(&self->mutex);
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                    "Failed to configure non-blocking tunnel socket: %s", g_strerror(err));
+        return FALSE;
+    }
 
     self->running = TRUE;
     self->state = MULTIWIFI_BONDING_STATE_CONNECTED;
@@ -530,7 +645,8 @@ void multiwifi_bonding_client_stop(MultiWifiBondingClient *self)
     }
 
     g_mutex_lock(&self->mutex);
-    if (!self->running && self->state == MULTIWIFI_BONDING_STATE_DISCONNECTED) {
+    if (!self->running && self->state == MULTIWIFI_BONDING_STATE_DISCONNECTED &&
+        self->worker == NULL && self->sock_fd < 0) {
         g_mutex_unlock(&self->mutex);
         return;
     }
@@ -538,17 +654,18 @@ void multiwifi_bonding_client_stop(MultiWifiBondingClient *self)
     self->state = MULTIWIFI_BONDING_STATE_DISCONNECTING;
     self->running = FALSE;
 
-    if (self->sock_fd >= 0) {
-        GByteArray *disc = multiwifi_frame_encode_disconnect(999, 0);
-        send(self->sock_fd, disc->data, disc->len, MSG_NOSIGNAL);
-        g_byte_array_free(disc, TRUE);
-
-        shutdown(self->sock_fd, SHUT_RDWR);
-    }
-
+    int sock_to_stop = self->sock_fd;
     GThread *w = self->worker;
     self->worker = NULL;
     g_mutex_unlock(&self->mutex);
+
+    if (sock_to_stop >= 0) {
+        GByteArray *disc = multiwifi_frame_encode_disconnect(999, 0);
+        (void)send_all_nonblock(sock_to_stop, &self->send_mutex, disc->data, disc->len, 100);
+        g_byte_array_free(disc, TRUE);
+
+        shutdown(sock_to_stop, SHUT_RDWR);
+    }
 
     if (w != NULL) {
         g_thread_join(w);

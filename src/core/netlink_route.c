@@ -9,8 +9,15 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/time.h>
 
 #define MULTIWIFI_NL_BUF_SIZE 8192
+
+static uint32_t next_nl_seq(void)
+{
+    static gint s_seq = 1;
+    return (uint32_t)g_atomic_int_add(&s_seq, 1);
+}
 
 int multiwifi_netlink_open(GError **error)
 {
@@ -20,6 +27,9 @@ int multiwifi_netlink_open(GError **error)
                     "Failed to open NETLINK_ROUTE socket: %s", g_strerror(errno));
         return -1;
     }
+
+    struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     struct sockaddr_nl sa;
     memset(&sa, 0, sizeof(sa));
@@ -66,8 +76,8 @@ static gboolean send_and_recv_ack(int nl_fd, struct nlmsghdr *nlh, GError **erro
     memset(&sa, 0, sizeof(sa));
     sa.nl_family = AF_NETLINK;
 
-    static uint32_t s_seq = 1;
-    nlh->nlmsg_seq = ++s_seq;
+    uint32_t seq = next_nl_seq();
+    nlh->nlmsg_seq = seq;
     nlh->nlmsg_flags |= NLM_F_ACK;
 
     if (sendto(nl_fd, nlh, nlh->nlmsg_len, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
@@ -77,32 +87,40 @@ static gboolean send_and_recv_ack(int nl_fd, struct nlmsghdr *nlh, GError **erro
     }
 
     char buf[MULTIWIFI_NL_BUF_SIZE];
-    ssize_t len;
-    do {
-        len = recv(nl_fd, buf, sizeof(buf), 0);
-    } while (len < 0 && errno == EINTR);
+    while (TRUE) {
+        ssize_t len;
+        do {
+            len = recv(nl_fd, buf, sizeof(buf), 0);
+        } while (len < 0 && errno == EINTR);
 
-    if (len < 0) {
-        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                    "Netlink recv failed: %s", g_strerror(errno));
-        return FALSE;
-    }
+        if (len < 0) {
+            g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                        "Netlink recv failed: %s", g_strerror(errno));
+            return FALSE;
+        }
 
-    struct nlmsghdr *resp = (struct nlmsghdr *)buf;
-    for (; NLMSG_OK(resp, (uint32_t)len); resp = NLMSG_NEXT(resp, len)) {
-        if (resp->nlmsg_type == NLMSG_ERROR) {
-            struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(resp);
-            if (err->error != 0) {
-                int code = -err->error;
-                g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
-                            "Netlink returned error: %s (errno %d)", g_strerror(code), code);
-                return FALSE;
+        size_t rem_len = (size_t)len;
+        struct nlmsghdr *resp = (struct nlmsghdr *)buf;
+        for (; NLMSG_OK(resp, rem_len); resp = NLMSG_NEXT(resp, rem_len)) {
+            if (resp->nlmsg_seq != seq) {
+                continue;
             }
-            return TRUE;
+            if (resp->nlmsg_type == NLMSG_ERROR) {
+                if (NLMSG_PAYLOAD(resp, 0) < sizeof(struct nlmsgerr)) {
+                    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Truncated NLMSG_ERROR packet");
+                    return FALSE;
+                }
+                struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(resp);
+                if (err->error != 0) {
+                    int code = -err->error;
+                    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                "Netlink returned error: %s (errno %d)", g_strerror(code), code);
+                    return FALSE;
+                }
+                return TRUE;
+            }
         }
     }
-
-    return TRUE;
 }
 
 static gboolean parse_src_ip_clean(const gchar *src_ip, struct in_addr *out_in)
@@ -258,8 +276,8 @@ gboolean multiwifi_netlink_verify_rule(int nl_fd,
     memset(&sa, 0, sizeof(sa));
     sa.nl_family = AF_NETLINK;
 
-    static uint32_t s_seq = 100;
-    n->nlmsg_seq = ++s_seq;
+    uint32_t seq = next_nl_seq();
+    n->nlmsg_seq = seq;
 
     if (sendto(nl_fd, n, n->nlmsg_len, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to send RTM_GETRULE dump request");
@@ -281,16 +299,29 @@ gboolean multiwifi_netlink_verify_rule(int nl_fd,
 
         struct nlmsghdr *resp = (struct nlmsghdr *)recv_buf;
         for (; NLMSG_OK(resp, (uint32_t)len); resp = NLMSG_NEXT(resp, len)) {
+            if (resp->nlmsg_seq != seq) {
+                continue;
+            }
             if (resp->nlmsg_type == NLMSG_DONE) {
                 done = TRUE;
                 break;
             }
             if (resp->nlmsg_type == NLMSG_ERROR) {
-                g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Rule dump returned error");
+                int code = EIO;
+                if (NLMSG_PAYLOAD(resp, 0) >= sizeof(struct nlmsgerr)) {
+                    struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(resp);
+                    if (err->error == 0) {
+                        done = TRUE;
+                        break;
+                    }
+                    code = -err->error;
+                }
+                g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                            "Rule dump returned error: %s (errno %d)", g_strerror(code), code);
                 return FALSE;
             }
 
-            if (resp->nlmsg_type == RTM_NEWRULE) {
+            if (resp->nlmsg_type == RTM_NEWRULE && resp->nlmsg_len >= NLMSG_LENGTH(sizeof(struct fib_rule_hdr))) {
                 struct fib_rule_hdr *rule = (struct fib_rule_hdr *)NLMSG_DATA(resp);
                 uint32_t r_table = rule->table;
                 uint32_t r_pref = 0;
@@ -299,12 +330,18 @@ gboolean multiwifi_netlink_verify_rule(int nl_fd,
                 int rta_len = (resp->nlmsg_len >= hdr_len) ? (int)(resp->nlmsg_len - hdr_len) : 0;
                 struct rtattr *rta = (struct rtattr *)(((char *)rule) + NLMSG_ALIGN(sizeof(*rule)));
 
-                for (; RTA_OK(rta, rta_len); rta = RTA_NEXT(rta, rta_len)) {
-                    if (rta->rta_type == FRA_TABLE) {
-                        r_table = *(uint32_t *)RTA_DATA(rta);
-                    } else if (rta->rta_type == FRA_PRIORITY) {
-                        r_pref = *(uint32_t *)RTA_DATA(rta);
+                for (; rta_len >= (int)sizeof(*rta) && RTA_OK(rta, (unsigned int)rta_len); ) {
+                    if (rta->rta_type == FRA_TABLE && RTA_PAYLOAD(rta) >= sizeof(uint32_t)) {
+                        memcpy(&r_table, RTA_DATA(rta), sizeof(uint32_t));
+                    } else if (rta->rta_type == FRA_PRIORITY && RTA_PAYLOAD(rta) >= sizeof(uint32_t)) {
+                        memcpy(&r_pref, RTA_DATA(rta), sizeof(uint32_t));
                     }
+                    unsigned int aligned = (unsigned int)RTA_ALIGN(rta->rta_len);
+                    if (aligned == 0 || (int)aligned > rta_len) {
+                        break;
+                    }
+                    rta_len -= (int)aligned;
+                    rta = (struct rtattr *)(((char *)rta) + aligned);
                 }
 
                 if (r_pref == pref && (table_id == 0 || r_table == table_id)) {
@@ -588,8 +625,8 @@ gboolean multiwifi_netlink_verify_route(int nl_fd,
     memset(&sa, 0, sizeof(sa));
     sa.nl_family = AF_NETLINK;
 
-    static uint32_t s_seq = 200;
-    n->nlmsg_seq = ++s_seq;
+    uint32_t seq = next_nl_seq();
+    n->nlmsg_seq = seq;
 
     if (sendto(nl_fd, n, n->nlmsg_len, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
         g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to send RTM_GETROUTE dump request");
@@ -609,19 +646,36 @@ gboolean multiwifi_netlink_verify_route(int nl_fd,
             return FALSE;
         }
 
+        size_t rem_len = (size_t)len;
         struct nlmsghdr *resp = (struct nlmsghdr *)recv_buf;
-        for (; NLMSG_OK(resp, (uint32_t)len); resp = NLMSG_NEXT(resp, len)) {
+        for (; NLMSG_OK(resp, rem_len); resp = NLMSG_NEXT(resp, rem_len)) {
+            if (resp->nlmsg_seq != seq) {
+                continue;
+            }
             if (resp->nlmsg_type == NLMSG_DONE) {
                 done = TRUE;
                 break;
             }
             if (resp->nlmsg_type == NLMSG_ERROR) {
+                if (NLMSG_PAYLOAD(resp, 0) >= sizeof(struct nlmsgerr)) {
+                    struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(resp);
+                    int err_code = (err->error < 0) ? -err->error : err->error;
+                    if (err_code != 0) {
+                        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                                    "Route dump returned error: %s", g_strerror(err_code));
+                        return FALSE;
+                    }
+                }
                 g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Route dump returned error");
                 return FALSE;
             }
 
-            if (resp->nlmsg_type == RTM_NEWROUTE) {
+            if (resp->nlmsg_type == RTM_NEWROUTE &&
+                NLMSG_PAYLOAD(resp, 0) >= sizeof(struct rtmsg)) {
                 struct rtmsg *r = (struct rtmsg *)NLMSG_DATA(resp);
+                if (r->rtm_family != AF_INET) {
+                    continue;
+                }
                 uint32_t r_table = r->rtm_table;
                 uint32_t r_oif = 0;
                 struct in_addr r_gw;
@@ -629,18 +683,27 @@ gboolean multiwifi_netlink_verify_route(int nl_fd,
                 gboolean r_has_gw = FALSE;
 
                 size_t hdr_len = NLMSG_LENGTH(sizeof(*r));
-                int rta_len = (resp->nlmsg_len >= hdr_len) ? (int)(resp->nlmsg_len - hdr_len) : 0;
+                size_t rta_len = (resp->nlmsg_len >= hdr_len) ? (size_t)(resp->nlmsg_len - hdr_len) : 0;
                 struct rtattr *rta = (struct rtattr *)(((char *)r) + NLMSG_ALIGN(sizeof(*r)));
 
-                for (; RTA_OK(rta, rta_len); rta = RTA_NEXT(rta, rta_len)) {
-                    if (rta->rta_type == RTA_TABLE) {
-                        r_table = *(uint32_t *)RTA_DATA(rta);
-                    } else if (rta->rta_type == RTA_OIF) {
-                        r_oif = *(uint32_t *)RTA_DATA(rta);
-                    } else if (rta->rta_type == RTA_GATEWAY) {
+                while (rta_len >= sizeof(struct rtattr) &&
+                       rta->rta_len >= sizeof(struct rtattr) &&
+                       rta->rta_len <= rta_len) {
+                    size_t payload_len = RTA_PAYLOAD(rta);
+                    if (rta->rta_type == RTA_TABLE && payload_len >= sizeof(uint32_t)) {
+                        memcpy(&r_table, RTA_DATA(rta), sizeof(r_table));
+                    } else if (rta->rta_type == RTA_OIF && payload_len >= sizeof(uint32_t)) {
+                        memcpy(&r_oif, RTA_DATA(rta), sizeof(r_oif));
+                    } else if (rta->rta_type == RTA_GATEWAY && payload_len >= sizeof(r_gw)) {
                         memcpy(&r_gw, RTA_DATA(rta), sizeof(r_gw));
                         r_has_gw = TRUE;
                     }
+                    size_t step = RTA_ALIGN(rta->rta_len);
+                    if (step > rta_len) {
+                        break;
+                    }
+                    rta = (struct rtattr *)(((char *)rta) + step);
+                    rta_len -= step;
                 }
 
                 if (r_table == table_id) {

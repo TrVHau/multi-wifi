@@ -316,6 +316,7 @@ static void test_transaction_apply_verify_teardown(void)
     g_free(td_op_id);
     g_object_unref(op_mgr);
     g_object_unref(mgr);
+    g_rmdir(tmp_journal_dir);
     g_free(tmp_journal_dir);
 }
 
@@ -367,6 +368,7 @@ static void test_transaction_failure_and_rollback(void)
     g_free(op_id);
     g_object_unref(op_mgr);
     g_object_unref(mgr);
+    g_rmdir(tmp_journal_dir);
     g_free(tmp_journal_dir);
 }
 

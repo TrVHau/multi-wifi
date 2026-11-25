@@ -2,7 +2,7 @@
 // Permits local administrators (wheel/sudo) to manage uplinks
 polkit.addRule(function(action, subject) {
     if (action.id == "io.github.multiwifi.modify") {
-        if (subject.isInGroup("wheel") || subject.isInGroup("sudo")) {
+        if (subject.local && (subject.isInGroup("wheel") || subject.isInGroup("sudo"))) {
             return polkit.Result.YES;
         }
         if (subject.local && subject.active) {

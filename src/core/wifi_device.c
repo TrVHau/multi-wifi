@@ -1,5 +1,8 @@
 #include "multiwifi/core/wifi_device.h"
 #include <stdio.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 MultiWifiDeviceInfo *multiwifi_device_info_new(void)
 {
@@ -171,4 +174,72 @@ void multiwifi_access_point_info_free(MultiWifiAccessPointInfo *info)
     g_free(info->saved_connection_id);
     g_free(info->security_str);
     g_free(info);
+}
+
+void multiwifi_wifi_device_fill_kernel_ipv4(const gchar *ifname,
+                                            gchar **out_addr,
+                                            gchar **out_gw)
+{
+    if (ifname == NULL || *ifname == '\0') {
+        return;
+    }
+
+    if (out_addr != NULL && (*out_addr == NULL || **out_addr == '\0')) {
+        g_clear_pointer(out_addr, g_free);
+        struct ifaddrs *ifaddr = NULL;
+        if (getifaddrs(&ifaddr) == 0 && ifaddr != NULL) {
+            for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                if (ifa->ifa_addr == NULL || ifa->ifa_name == NULL) {
+                    continue;
+                }
+                if (g_strcmp0(ifa->ifa_name, ifname) == 0 && ifa->ifa_addr->sa_family == AF_INET) {
+                    const struct sockaddr_in *sin = (const struct sockaddr_in *)ifa->ifa_addr;
+                    const struct sockaddr_in *netmask = (const struct sockaddr_in *)ifa->ifa_netmask;
+                    char ip_buf[INET_ADDRSTRLEN];
+                    if (inet_ntop(AF_INET, &sin->sin_addr, ip_buf, sizeof(ip_buf)) != NULL) {
+                        uint32_t mask = netmask ? ntohl(netmask->sin_addr.s_addr) : 0;
+                        int prefix = 0;
+                        while (mask > 0) {
+                            if (mask & 0x80000000U) {
+                                prefix++;
+                            }
+                            mask <<= 1;
+                        }
+                        if (prefix == 0) {
+                            prefix = 24;
+                        }
+                        *out_addr = g_strdup_printf("%s/%d", ip_buf, prefix);
+                        break;
+                    }
+                }
+            }
+            freeifaddrs(ifaddr);
+        }
+    }
+
+    if (out_gw != NULL && (*out_gw == NULL || **out_gw == '\0')) {
+        g_clear_pointer(out_gw, g_free);
+        FILE *f = fopen("/proc/net/route", "r");
+        if (f != NULL) {
+            char line[256];
+            if (fgets(line, sizeof(line), f) != NULL) {
+                while (fgets(line, sizeof(line), f) != NULL) {
+                    char dev[64];
+                    unsigned long dest = 0, gw = 0, flags = 0;
+                    if (sscanf(line, "%63s %lx %lx %lx", dev, &dest, &gw, &flags) == 4) {
+                        if (g_strcmp0(dev, ifname) == 0 && dest == 0 && (flags & 0x2UL)) {
+                            struct in_addr gw_in;
+                            gw_in.s_addr = (in_addr_t)gw;
+                            char gw_buf[INET_ADDRSTRLEN];
+                            if (inet_ntop(AF_INET, &gw_in, gw_buf, sizeof(gw_buf)) != NULL) {
+                                *out_gw = g_strdup(gw_buf);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            fclose(f);
+        }
+    }
 }

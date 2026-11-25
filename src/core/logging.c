@@ -68,6 +68,9 @@ static GLogWriterOutput multiwifi_log_writer(
     (void)user_data;
 
     for (gsize i = 0; i < n_fields; i++) {
+        if (fields[i].value == NULL) {
+            continue;
+        }
         if (g_strcmp0(fields[i].key, "GLIB_DOMAIN") == 0) {
             domain = (const gchar *)fields[i].value;
         } else if (g_strcmp0(fields[i].key, "MESSAGE") == 0) {

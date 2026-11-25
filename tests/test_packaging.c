@@ -93,7 +93,7 @@ static void test_dbus_policy_safety(void)
     const gchar *end_default_policy = strstr(default_policy, "</policy>");
     g_assert_nonnull(end_default_policy);
 
-    gchar *def_segment = g_strndup(default_policy, end_default_policy - default_policy);
+    gchar *def_segment = g_strndup(default_policy, (gsize)(end_default_policy - default_policy));
     g_assert_null(strstr(def_segment, "allow own"));
     g_free(def_segment);
 

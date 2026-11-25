@@ -172,6 +172,11 @@ gboolean multiwifi_routing_manager_check_conflicts(MultiWifiRoutingManager *self
 
     for (guint i = 0; i < plan->uplinks->len; i++) {
         MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, i);
+        u->orig_rp_filter = -1;
+    }
+
+    for (guint i = 0; i < plan->uplinks->len; i++) {
+        MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, i);
 
         if (u->ifname == NULL || *u->ifname == '\0') {
             g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "Uplink has empty interface name");
@@ -285,6 +290,40 @@ static void execute_journal_rollback(int nl_fd, MultiWifiRouteJournal *journal)
     g_info("Atomic rollback for operation '%s' completed.", multiwifi_route_journal_get_op_id(journal));
 }
 
+static void restore_rp_filters(MultiWifiRoutingManager *self, const MultiWifiRoutePlan *plan)
+{
+    if (plan != NULL && plan->uplinks != NULL) {
+        for (int i = (int)plan->uplinks->len - 1; i >= 0; i--) {
+            MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, (guint)i);
+            /* Restore original rp_filter only if we previously adapted it from Strict (1) */
+            if (u->orig_rp_filter == 1) {
+                set_rp_filter(u->ifname, 1);
+            }
+        }
+    }
+    if (self->rp_filter_all_modified) {
+        set_rp_filter(NULL, self->orig_rp_filter_all);
+        self->rp_filter_all_modified = FALSE;
+    }
+}
+
+static MultiWifiUplinkRouteConfig *uplink_config_dup(const MultiWifiUplinkRouteConfig *src)
+{
+    MultiWifiUplinkRouteConfig *dst = g_new0(MultiWifiUplinkRouteConfig, 1);
+    dst->ifname = g_strdup(src->ifname);
+    dst->ifindex = src->ifindex;
+    dst->ipv4_address = g_strdup(src->ipv4_address);
+    dst->gateway = g_strdup(src->gateway);
+    dst->table_id = src->table_id;
+    dst->src_rule_pref = src->src_rule_pref;
+    dst->fwmark_rule_pref = src->fwmark_rule_pref;
+    dst->fwmark = src->fwmark;
+    dst->fwmask = src->fwmask;
+    dst->metric = src->metric;
+    dst->orig_rp_filter = src->orig_rp_filter;
+    return dst;
+}
+
 gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
                                               const gchar *op_id,
                                               const MultiWifiRoutePlan *plan,
@@ -304,19 +343,19 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
     }
 
     if (!multiwifi_routing_manager_check_conflicts(self, plan, error)) {
+        g_mutex_unlock(&self->mutex);
         if (op_mgr != NULL) {
             multiwifi_op_manager_finish(op_mgr, op_id, FALSE, NULL, "Validation failed: routing conflict detected");
         }
-        g_mutex_unlock(&self->mutex);
         return FALSE;
     }
 
     int nl_fd = multiwifi_netlink_open(error);
     if (nl_fd < 0) {
+        g_mutex_unlock(&self->mutex);
         if (op_mgr != NULL) {
             multiwifi_op_manager_finish(op_mgr, op_id, FALSE, NULL, "Netlink socket failure");
         }
-        g_mutex_unlock(&self->mutex);
         return FALSE;
     }
 
@@ -331,6 +370,11 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
     g_free(journal_filename);
 
     gboolean apply_ok = TRUE;
+
+    for (guint i = 0; i < plan->uplinks->len; i++) {
+        MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, i);
+        u->orig_rp_filter = -1;
+    }
 
     for (guint i = 0; i < plan->uplinks->len; i++) {
         MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, i);
@@ -387,14 +431,15 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
             multiwifi_op_manager_update(op_mgr, op_id, MULTIWIFI_OP_STATE_ROLLING_BACK, 70, "Mutation failed; rolling back");
         }
         execute_journal_rollback(nl_fd, journal);
+        restore_rp_filters(self, plan);
         multiwifi_route_journal_remove_file(journal_path);
         multiwifi_route_journal_free(journal);
         g_free(journal_path);
         multiwifi_netlink_close(nl_fd);
+        g_mutex_unlock(&self->mutex);
         if (op_mgr != NULL) {
             multiwifi_op_manager_finish(op_mgr, op_id, FALSE, NULL, "Transaction failed and cleanly rolled back");
         }
-        g_mutex_unlock(&self->mutex);
         return FALSE;
     }
 
@@ -404,6 +449,11 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
     }
 
     gboolean verify_ok = TRUE;
+    for (guint i = 0; i < plan->uplinks->len; i++) {
+        MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, i);
+        u->orig_rp_filter = -1;
+    }
+
     for (guint i = 0; i < plan->uplinks->len; i++) {
         MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, i);
 
@@ -448,14 +498,15 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
             multiwifi_op_manager_update(op_mgr, op_id, MULTIWIFI_OP_STATE_ROLLING_BACK, 90, "Verification failed; rolling back");
         }
         execute_journal_rollback(nl_fd, journal);
+        restore_rp_filters(self, plan);
         multiwifi_route_journal_remove_file(journal_path);
         multiwifi_route_journal_free(journal);
         g_free(journal_path);
         multiwifi_netlink_close(nl_fd);
+        g_mutex_unlock(&self->mutex);
         if (op_mgr != NULL) {
             multiwifi_op_manager_finish(op_mgr, op_id, FALSE, NULL, "Verification failed; changes rolled back");
         }
-        g_mutex_unlock(&self->mutex);
         return FALSE;
     }
 
@@ -469,20 +520,20 @@ gboolean multiwifi_routing_manager_apply_plan(MultiWifiRoutingManager *self,
         multiwifi_route_plan_free(self->active_plan);
     }
 
-    /* Duplicate plan into active_plan */
+    /* Deep copy plan into active_plan preserving custom rule IDs and orig_rp_filter */
     self->active_plan = multiwifi_route_plan_new();
     for (guint i = 0; i < plan->uplinks->len; i++) {
         MultiWifiUplinkRouteConfig *u = g_ptr_array_index(plan->uplinks, i);
-        multiwifi_route_plan_add_uplink(self->active_plan, u->ifname, u->ifindex,
-                                        u->ipv4_address, u->gateway, i);
+        g_ptr_array_add(self->active_plan->uplinks, uplink_config_dup(u));
     }
     self->is_active = TRUE;
+
+    g_mutex_unlock(&self->mutex);
 
     if (op_mgr != NULL) {
         multiwifi_op_manager_finish(op_mgr, op_id, TRUE, NULL, "Policy routing applied and verified successfully");
     }
 
-    g_mutex_unlock(&self->mutex);
     return TRUE;
 }
 
@@ -522,27 +573,23 @@ gboolean multiwifi_routing_manager_teardown(MultiWifiRoutingManager *self,
             if (u->ipv4_address != NULL && *u->ipv4_address != '\0') {
                 multiwifi_netlink_del_rule(nl_fd, u->table_id, u->src_rule_pref, 0, 0, u->ipv4_address, NULL);
             }
-            /* Restore original rp_filter only if we previously adapted it from Strict (1) */
-            if (u->orig_rp_filter == 1) {
-                set_rp_filter(u->ifname, 1);
-            }
         }
-        if (self->rp_filter_all_modified) {
-            set_rp_filter(NULL, self->orig_rp_filter_all);
-            self->rp_filter_all_modified = FALSE;
-        }
+        restore_rp_filters(self, self->active_plan);
         multiwifi_netlink_close(nl_fd);
+    } else {
+        restore_rp_filters(self, self->active_plan);
     }
 
     multiwifi_route_plan_free(self->active_plan);
     self->active_plan = NULL;
     self->is_active = FALSE;
 
+    g_mutex_unlock(&self->mutex);
+
     if (op_mgr != NULL && op_id != NULL) {
         multiwifi_op_manager_finish(op_mgr, op_id, TRUE, NULL, "Policy routing tables cleanly dismantled");
     }
 
-    g_mutex_unlock(&self->mutex);
     return TRUE;
 }
 

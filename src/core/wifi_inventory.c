@@ -2,10 +2,6 @@
 #include "multiwifi/core/logging.h"
 #include <NetworkManager.h>
 #include <net/if.h>
-#include <stdio.h>
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 
 enum {
     SIGNAL_DEVICES_CHANGED,
@@ -17,6 +13,8 @@ static guint s_signals[LAST_SIGNAL] = { 0 };
 struct _MultiWifiInventory {
     GObject parent_instance;
     NMClient *client;
+    GCancellable *cancellable;
+    gboolean starting;
     GPtrArray *cached_devices; /* MultiWifiDeviceInfo* */
     GMutex mutex;
 };
@@ -28,6 +26,11 @@ static void multiwifi_inventory_refresh_locked(MultiWifiInventory *self);
 static void multiwifi_inventory_dispose(GObject *object)
 {
     MultiWifiInventory *self = MULTIWIFI_INVENTORY(object);
+
+    if (self->cancellable != NULL) {
+        g_cancellable_cancel(self->cancellable);
+        g_clear_object(&self->cancellable);
+    }
 
     g_mutex_lock(&self->mutex);
     if (self->cached_devices != NULL) {
@@ -70,72 +73,13 @@ static void multiwifi_inventory_class_init(MultiWifiInventoryClass *klass)
 static void multiwifi_inventory_init(MultiWifiInventory *self)
 {
     g_mutex_init(&self->mutex);
+    self->cancellable = g_cancellable_new();
     self->cached_devices = g_ptr_array_new_with_free_func((GDestroyNotify)multiwifi_device_info_free);
 }
 
 MultiWifiInventory *multiwifi_inventory_new(void)
 {
     return g_object_new(MULTIWIFI_TYPE_INVENTORY, NULL);
-}
-
-static void get_kernel_ipv4_for_iface(const gchar *ifname, gchar **out_addr, gchar **out_gw)
-{
-    if (ifname == NULL || *ifname == '\0') {
-        return;
-    }
-
-    if (out_addr != NULL && *out_addr == NULL) {
-        struct ifaddrs *ifaddr = NULL;
-        if (getifaddrs(&ifaddr) == 0 && ifaddr != NULL) {
-            for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-                if (ifa->ifa_addr == NULL || ifa->ifa_name == NULL) {
-                    continue;
-                }
-                if (g_strcmp0(ifa->ifa_name, ifname) == 0 && ifa->ifa_addr->sa_family == AF_INET) {
-                    struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
-                    struct sockaddr_in *netmask = (struct sockaddr_in *)ifa->ifa_netmask;
-                    char ip_buf[INET_ADDRSTRLEN];
-                    if (inet_ntop(AF_INET, &sin->sin_addr, ip_buf, sizeof(ip_buf)) != NULL) {
-                        uint32_t mask = netmask ? ntohl(netmask->sin_addr.s_addr) : 0;
-                        int prefix = 0;
-                        while (mask > 0) {
-                            if (mask & 0x80000000) prefix++;
-                            mask <<= 1;
-                        }
-                        if (prefix == 0) prefix = 24;
-                        *out_addr = g_strdup_printf("%s/%d", ip_buf, prefix);
-                        break;
-                    }
-                }
-            }
-            freeifaddrs(ifaddr);
-        }
-    }
-
-    if (out_gw != NULL && *out_gw == NULL) {
-        FILE *f = fopen("/proc/net/route", "r");
-        if (f != NULL) {
-            char line[256];
-            if (fgets(line, sizeof(line), f) != NULL) {
-                while (fgets(line, sizeof(line), f) != NULL) {
-                    char dev[64];
-                    unsigned long dest = 0, gw = 0, flags = 0;
-                    if (sscanf(line, "%63s %lx %lx %lx", dev, &dest, &gw, &flags) == 4) {
-                        if (g_strcmp0(dev, ifname) == 0 && dest == 0 && (flags & 0x2)) {
-                            struct in_addr gw_in;
-                            gw_in.s_addr = (in_addr_t)gw;
-                            char gw_buf[INET_ADDRSTRLEN];
-                            if (inet_ntop(AF_INET, &gw_in, gw_buf, sizeof(gw_buf)) != NULL) {
-                                *out_gw = g_strdup(gw_buf);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            fclose(f);
-        }
-    }
 }
 
 static MultiWifiDeviceInfo *extract_wifi_device_info(NMDeviceWifi *wifi_dev)
@@ -193,7 +137,7 @@ static MultiWifiDeviceInfo *extract_wifi_device_info(NMDeviceWifi *wifi_dev)
 
     /* Authoritative kernel fallback if libnm has not yet populated IPv4 address or Gateway */
     if (info->ifname != NULL && (info->ipv4_address == NULL || info->ipv4_gateway == NULL)) {
-        get_kernel_ipv4_for_iface(info->ifname, &info->ipv4_address, &info->ipv4_gateway);
+        multiwifi_wifi_device_fill_kernel_ipv4(info->ifname, &info->ipv4_address, &info->ipv4_gateway);
     }
 
     /* IPv6 Configuration */
@@ -346,13 +290,26 @@ static void on_nm_client_ready(GObject *source, GAsyncResult *res, gpointer user
     (void)source;
     MultiWifiInventory *self = MULTIWIFI_INVENTORY(user_data);
     GError *error = NULL;
+    NMClient *client = nm_client_new_finish(res, &error);
 
-    self->client = nm_client_new_finish(res, &error);
+    self->starting = FALSE;
     if (error != NULL) {
-        g_warning("Failed to initialize libnm client: %s", error->message);
+        if (!g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            g_warning("Failed to initialize libnm client: %s", error->message);
+        }
         g_error_free(error);
+        g_object_unref(self);
         return;
     }
+
+    if (self->cancellable == NULL || g_cancellable_is_cancelled(self->cancellable)) {
+        g_clear_object(&client);
+        g_object_unref(self);
+        return;
+    }
+
+    g_clear_object(&self->client);
+    self->client = client;
 
     g_info("libnm client initialized successfully (NM daemon running: %s)",
            nm_client_get_nm_running(self->client) ? "yes" : "no");
@@ -379,6 +336,7 @@ static void on_nm_client_ready(GObject *source, GAsyncResult *res, gpointer user
     g_mutex_unlock(&self->mutex);
 
     g_signal_emit(self, s_signals[SIGNAL_DEVICES_CHANGED], 0);
+    g_object_unref(self);
 }
 
 gboolean multiwifi_inventory_start(MultiWifiInventory *self, GError **error)
@@ -388,11 +346,16 @@ gboolean multiwifi_inventory_start(MultiWifiInventory *self, GError **error)
         return FALSE;
     }
 
-    if (self->client != NULL) {
+    if (self->client != NULL || self->starting) {
         return TRUE;
     }
 
-    nm_client_new_async(NULL, on_nm_client_ready, self);
+    if (self->cancellable == NULL) {
+        self->cancellable = g_cancellable_new();
+    }
+
+    self->starting = TRUE;
+    nm_client_new_async(self->cancellable, on_nm_client_ready, g_object_ref(self));
     return TRUE;
 }
 
@@ -636,9 +599,13 @@ static void on_scan_async_ready(GObject *source, GAsyncResult *res, gpointer use
     GError *error = NULL;
 
     gboolean success = nm_device_wifi_request_scan_finish(NM_DEVICE_WIFI(source), res, &error);
-    if (!success && error != NULL) {
+    if (!success) {
+        if (error == NULL) {
+            error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED, "Wi-Fi scan request failed");
+        }
         g_task_return_error(task, error);
     } else {
+        g_clear_error(&error);
         g_task_return_boolean(task, TRUE);
     }
     g_object_unref(task);
@@ -679,8 +646,13 @@ static void on_activate_conn_ready(GObject *source, GAsyncResult *res, gpointer 
 
     NMActiveConnection *act = nm_client_activate_connection_finish(NM_CLIENT(source), res, &error);
     if (act == NULL) {
+        if (error == NULL) {
+            error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to activate Wi-Fi connection");
+        }
         g_task_return_error(task, error);
     } else {
+        g_object_unref(act);
+        g_clear_error(&error);
         g_task_return_boolean(task, TRUE);
     }
     g_object_unref(task);
@@ -693,8 +665,13 @@ static void on_add_activate_conn_ready(GObject *source, GAsyncResult *res, gpoin
 
     NMActiveConnection *act = nm_client_add_and_activate_connection_finish(NM_CLIENT(source), res, &error);
     if (act == NULL) {
+        if (error == NULL) {
+            error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_FAILED, "Failed to create and activate Wi-Fi connection");
+        }
         g_task_return_error(task, error);
     } else {
+        g_object_unref(act);
+        g_clear_error(&error);
         g_task_return_boolean(task, TRUE);
     }
     g_object_unref(task);
@@ -710,10 +687,19 @@ void multiwifi_inventory_connect_wifi_async(MultiWifiInventory *self,
 {
     GTask *task = g_task_new(self, cancellable, callback, user_data);
 
+    if (self == NULL || self->client == NULL ||
+        ifname == NULL || *ifname == '\0' ||
+        ssid == NULL || *ssid == '\0') {
+        g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+                                "Invalid inventory state, adapter, or SSID for Wi-Fi connection");
+        g_object_unref(task);
+        return;
+    }
+
     NMDeviceWifi *wifi_dev = find_nm_device_wifi(self, ifname);
     if (wifi_dev == NULL) {
         g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                                "Wi-Fi device '%s' not found", ifname ? ifname : "unknown");
+                                "Wi-Fi device '%s' not found", ifname);
         g_object_unref(task);
         return;
     }
@@ -740,12 +726,17 @@ void multiwifi_inventory_connect_wifi_async(MultiWifiInventory *self,
         /* Profile is bound to another adapter: clone connection targeting ifname */
         NMConnection *cloned = nm_simple_connection_new_clone(saved);
         NMSettingConnection *s_c = nm_connection_get_setting_connection(cloned);
-        gchar *new_id = g_strdup_printf("%s-%s", ssid, ifname);
-        g_object_set(s_c,
-            NM_SETTING_CONNECTION_INTERFACE_NAME, ifname,
-            NM_SETTING_CONNECTION_ID, new_id,
-            NULL);
-        g_free(new_id);
+        if (s_c != NULL) {
+            gchar *new_uuid = g_uuid_string_random();
+            gchar *new_id = g_strdup_printf("%s-%s", ssid, ifname);
+            g_object_set(s_c,
+                NM_SETTING_CONNECTION_UUID, new_uuid,
+                NM_SETTING_CONNECTION_INTERFACE_NAME, ifname,
+                NM_SETTING_CONNECTION_ID, new_id,
+                NULL);
+            g_free(new_uuid);
+            g_free(new_id);
+        }
 
         nm_client_add_and_activate_connection_async(
             self->client,
@@ -763,12 +754,15 @@ void multiwifi_inventory_connect_wifi_async(MultiWifiInventory *self,
     /* Create new connection profile */
     NMConnection *conn = nm_simple_connection_new();
     NMSettingConnection *s_con = (NMSettingConnection *)nm_setting_connection_new();
+    gchar *new_uuid = g_uuid_string_random();
     gchar *new_id = g_strdup_printf("%s-%s", ssid, ifname);
     g_object_set(s_con,
+        NM_SETTING_CONNECTION_UUID, new_uuid,
         NM_SETTING_CONNECTION_ID, new_id,
         NM_SETTING_CONNECTION_TYPE, NM_SETTING_WIRELESS_SETTING_NAME,
         NM_SETTING_CONNECTION_INTERFACE_NAME, ifname,
         NULL);
+    g_free(new_uuid);
     g_free(new_id);
     nm_connection_add_setting(conn, NM_SETTING(s_con));
 

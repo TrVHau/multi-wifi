@@ -59,7 +59,9 @@ install -Dpm 0644 LICENSE %{buildroot}%{_datadir}/licenses/%{name}/LICENSE
 %{_datadir}/icons/hicolor/*/apps/io.github.multiwifi.MultiWiFi.png
 %{_datadir}/dbus-1/system.d/io.github.multiwifi.Daemon.conf
 %{_datadir}/dbus-1/interfaces/io.github.multiwifi.Daemon1.xml
+%{_datadir}/multiwifi/style.css
 %{_datadir}/polkit-1/actions/io.github.multiwifi.policy
+%{_datadir}/polkit-1/rules.d/io.github.multiwifi.rules
 %{_unitdir}/multiwifi-daemon.service
 
 %changelog

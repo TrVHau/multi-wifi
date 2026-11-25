@@ -50,10 +50,12 @@ GByteArray *multiwifi_frame_encode_auth_req(uint32_t sequence,
 {
     const gchar *pid = profile_id ? profile_id : "";
     const gchar *tok = token ? token : "";
-    uint16_t pid_len = (uint16_t)strlen(pid);
-    uint16_t tok_len = (uint16_t)strlen(tok);
+    gsize raw_pid_len = strlen(pid);
+    gsize raw_tok_len = strlen(tok);
+    uint16_t pid_len = (raw_pid_len > UINT16_MAX) ? UINT16_MAX : (uint16_t)raw_pid_len;
+    uint16_t tok_len = (raw_tok_len > UINT16_MAX) ? UINT16_MAX : (uint16_t)raw_tok_len;
 
-    uint32_t payload_size = 4 + 2 + pid_len + 2 + tok_len;
+    uint32_t payload_size = 4U + 2U + (uint32_t)pid_len + 2U + (uint32_t)tok_len;
     guint8 *buf = g_malloc0(payload_size);
 
     uint32_t ver_be = GUINT32_TO_BE(MULTIWIFI_BONDING_VERSION);
@@ -141,19 +143,24 @@ GByteArray *multiwifi_frame_encode_auth_resp(uint32_t sequence,
                                              const gchar *message)
 {
     const gchar *msg = message ? message : "";
-    uint16_t msg_len = (uint16_t)strlen(msg);
+    gsize raw_msg_len = strlen(msg);
+    uint16_t msg_len = (raw_msg_len > UINT16_MAX) ? UINT16_MAX : (uint16_t)raw_msg_len;
 
-    uint32_t payload_size = 4 + 4 + 4 + 4 + 2 + msg_len;
+    uint32_t payload_size = 4U + 4U + 4U + 4U + 2U + (uint32_t)msg_len;
     guint8 *buf = g_malloc0(payload_size);
 
     uint32_t status_be = GUINT32_TO_BE(status);
     uint32_t vip_raw = 0;
     if (assigned_vip != NULL && *assigned_vip != '\0') {
-        inet_pton(AF_INET, assigned_vip, &vip_raw);
+        if (inet_pton(AF_INET, assigned_vip, &vip_raw) != 1) {
+            vip_raw = 0;
+        }
     }
     uint32_t mask_raw = 0;
     if (netmask != NULL && *netmask != '\0') {
-        inet_pton(AF_INET, netmask, &mask_raw);
+        if (inet_pton(AF_INET, netmask, &mask_raw) != 1) {
+            mask_raw = 0;
+        }
     }
     uint32_t mtu_be = GUINT32_TO_BE(server_mtu);
     uint16_t msg_len_be = GUINT16_TO_BE(msg_len);
@@ -212,12 +219,19 @@ gboolean multiwifi_frame_decode_auth_resp(const MultiWifiFrame *frame,
     offset += 4;
 
     char vip_str[INET_ADDRSTRLEN] = { 0 };
-    inet_ntop(AF_INET, p + offset, vip_str, sizeof(vip_str));
+    if (inet_ntop(AF_INET, p + offset, vip_str, sizeof(vip_str)) == NULL) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Invalid VIP address in AUTH_RESP");
+        return FALSE;
+    }
     *out_vip = g_strdup(vip_str);
     offset += 4;
 
     char mask_str[INET_ADDRSTRLEN] = { 0 };
-    inet_ntop(AF_INET, p + offset, mask_str, sizeof(mask_str));
+    if (inet_ntop(AF_INET, p + offset, mask_str, sizeof(mask_str)) == NULL) {
+        g_clear_pointer(out_vip, g_free);
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Invalid netmask in AUTH_RESP");
+        return FALSE;
+    }
     *out_netmask = g_strdup(mask_str);
     offset += 4;
 
@@ -312,8 +326,12 @@ GList *multiwifi_frame_parser_feed(MultiWifiFrameParser *self,
                                    gsize len,
                                    GError **error)
 {
-    (void)error;
-    if (self == NULL || data == NULL || len == 0) {
+    if (self == NULL || self->buffer == NULL || data == NULL || len == 0) {
+        return NULL;
+    }
+
+    if (len > (gsize)(G_MAXUINT - self->buffer->len)) {
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_NO_SPACE, "Incoming frame chunk exceeds parser capacity");
         return NULL;
     }
 
@@ -348,13 +366,14 @@ GList *multiwifi_frame_parser_feed(MultiWifiFrameParser *self,
             continue;
         }
 
-        /* Magic matched at index 0 */
+        /* Magic matched at index 0; verify protocol version & payload bounds */
+        uint8_t ver = self->buffer->data[4];
         uint32_t payload_len_be;
         memcpy(&payload_len_be, self->buffer->data + 8, 4);
         uint32_t payload_len = GUINT32_FROM_BE(payload_len_be);
 
-        if (payload_len > MULTIWIFI_BONDING_MAX_PAYLOAD) {
-            /* Corrupted header, discard magic byte to re-sync */
+        if (ver != MULTIWIFI_BONDING_VERSION || payload_len > MULTIWIFI_BONDING_MAX_PAYLOAD) {
+            /* Corrupted or unsupported header, discard magic to re-sync */
             g_byte_array_remove_range(self->buffer, 0, 4);
             continue;
         }

@@ -120,6 +120,19 @@ const gchar *multiwifi_device_state_to_string(MultiWifiDeviceState state);
  */
 gchar *multiwifi_device_info_to_string(const MultiWifiDeviceInfo *info);
 
+/**
+ * multiwifi_wifi_device_fill_kernel_ipv4:
+ * @ifname: Interface name (e.g. "wlp0s20f3")
+ * @out_addr: (inout)(transfer full)(nullable): Optional IPv4 CIDR destination (filled if NULL or empty)
+ * @out_gw: (inout)(transfer full)(nullable): Optional IPv4 default gateway destination (filled if NULL or empty)
+ *
+ * Queries kernel interface addresses (`getifaddrs`) and routing table (`/proc/net/route`)
+ * as a fallback when libnm has not yet exposed IPv4 configuration.
+ */
+void multiwifi_wifi_device_fill_kernel_ipv4(const gchar *ifname,
+                                            gchar **out_addr,
+                                            gchar **out_gw);
+
 G_END_DECLS
 
 #endif /* MULTIWIFI_WIFI_DEVICE_H */

@@ -1,9 +1,11 @@
+#define _POSIX_C_SOURCE 200809L
 #include "multiwifi/core/operation.h"
 #include "multiwifi/daemon/service.h"
 #include "multiwifi/shared/dbus_defs.h"
 #include "multiwifi/version.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
+#include <unistd.h>
 
 static void test_operation_manager_lifecycle(void)
 {
@@ -798,6 +800,84 @@ static void test_daemon_polkit_denial(void)
     g_object_unref(svc);
 }
 
+static void test_daemon_dns_hardening(void)
+{
+    gchar *tmp_dir = g_dir_make_tmp("multiwifi_dns_sec_XXXXXX", NULL);
+    g_assert_nonnull(tmp_dir);
+
+    gchar *fake_resolv = g_build_filename(tmp_dir, "resolv.conf", NULL);
+    g_file_set_contents(fake_resolv, "nameserver 8.8.8.8\n", -1, NULL);
+
+    gchar *nm_conf = g_build_filename(tmp_dir, "99-multiwifi-dns.conf", NULL);
+    gchar *victim = g_build_filename(tmp_dir, "victim.txt", NULL);
+    g_assert_cmpint(symlink(victim, nm_conf), ==, 0);
+
+    g_setenv("MULTIWIFI_DNS_CONF_DIR", tmp_dir, TRUE);
+    g_setenv("MULTIWIFI_RESOLV_CONF", fake_resolv, TRUE);
+
+    MultiWifiDaemonService *svc = multiwifi_daemon_service_new(G_BUS_TYPE_SESSION, FALSE);
+    g_assert_nonnull(svc);
+
+    GError *error = NULL;
+    g_assert_true(multiwifi_daemon_service_start(svc, &error));
+    g_assert_no_error(error);
+
+    GDBusConnection *conn = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(conn);
+
+    GMainContext *ctx = g_main_context_default();
+    for (int i = 0; i < 20; i++) {
+        g_main_context_iteration(ctx, FALSE);
+        g_usleep(10000);
+    }
+
+    /* 1. Symlink traversal defense: SetDNS must refuse following symlink at 99-multiwifi-dns.conf */
+    GVariantBuilder sym_b;
+    g_variant_builder_init(&sym_b, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&sym_b, "s", "1.1.1.1");
+    GVariant *reply = call_dbus_iterative(
+        conn, "SetDNS", g_variant_new("(@as)", g_variant_builder_end(&sym_b)),
+        G_VARIANT_TYPE("(s)"), &error
+    );
+    g_assert_null(reply);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+    g_assert_false(g_file_test(victim, G_FILE_TEST_EXISTS));
+
+    /* 2. Remove symlink and verify server-list ceiling (> 16 DNS entries rejected) */
+    g_unlink(nm_conf);
+    GVariantBuilder many_b;
+    g_variant_builder_init(&many_b, G_VARIANT_TYPE("as"));
+    for (int i = 0; i < 17; i++) {
+        g_autofree gchar *ip = g_strdup_printf("1.1.1.%d", i + 1);
+        g_variant_builder_add(&many_b, "s", ip);
+    }
+    reply = call_dbus_iterative(
+        conn, "SetDNS", g_variant_new("(@as)", g_variant_builder_end(&many_b)),
+        G_VARIANT_TYPE("(s)"), &error
+    );
+    g_assert_null(reply);
+    g_assert_nonnull(error);
+    gchar *remote_err = g_dbus_error_get_remote_error(error);
+    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+    g_free(remote_err);
+    g_clear_error(&error);
+
+    g_object_unref(conn);
+    multiwifi_daemon_service_stop(svc);
+    g_object_unref(svc);
+
+    g_unsetenv("MULTIWIFI_DNS_CONF_DIR");
+    g_unsetenv("MULTIWIFI_RESOLV_CONF");
+    g_unlink(fake_resolv);
+    g_free(fake_resolv);
+    g_free(nm_conf);
+    g_free(victim);
+    g_rmdir(tmp_dir);
+    g_free(tmp_dir);
+}
+
 int main(int argc, char *argv[])
 {
     g_test_init(&argc, &argv, NULL);
@@ -807,6 +887,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/dbus/daemon_dbus_ipc_roundtrip", test_daemon_dbus_ipc_roundtrip);
     g_test_add_func("/dbus/daemon_dbus_signals", test_daemon_dbus_signals);
     g_test_add_func("/dbus/daemon_polkit_denial", test_daemon_polkit_denial);
+    g_test_add_func("/dbus/daemon_dns_hardening", test_daemon_dns_hardening);
 
     return g_test_run();
 }

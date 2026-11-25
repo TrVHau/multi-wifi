@@ -2,7 +2,7 @@
 #include "multiwifi/core/logging.h"
 #include <gio/gio.h>
 #include <sys/socket.h>
-#include <sys/select.h>
+#include <poll.h>
 #include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -354,15 +354,20 @@ static gboolean try_single_port_probe(const gchar *ifname,
     if (res == 0) {
         success = TRUE;
     } else if (errno == EINPROGRESS) {
-        fd_set wfds;
-        FD_ZERO(&wfds);
-        FD_SET(sock, &wfds);
+        gint64 deadline_us = g_get_monotonic_time() + ((gint64)(timeout_ms > 0 ? timeout_ms : 1) * 1000);
+        int sel = 0;
 
-        struct timeval tv;
-        tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        while (TRUE) {
+            gint64 rem_us = deadline_us - g_get_monotonic_time();
+            int rem_ms = (rem_us > 0) ? (int)((rem_us + 999) / 1000) : 0;
+            struct pollfd pfd = { .fd = sock, .events = POLLOUT, .revents = 0 };
+            sel = poll(&pfd, 1, rem_ms);
+            if (sel < 0 && errno == EINTR && g_get_monotonic_time() < deadline_us) {
+                continue;
+            }
+            break;
+        }
 
-        int sel = select(sock + 1, NULL, &wfds, NULL, &tv);
         if (sel > 0) {
             int sock_err = 0;
             socklen_t len = sizeof(sock_err);
@@ -615,11 +620,14 @@ static void on_probe_task_done(GObject *source, GAsyncResult *res, gpointer user
     GPtrArray *batch = (GPtrArray *)g_task_get_task_data(G_TASK(res));
 
     g_mutex_lock(&self->mutex);
-    if (batch != NULL) {
+    if (batch != NULL && self->paths != NULL) {
         for (guint i = 0; i < batch->len; i++) {
             ProbeItem *item = g_ptr_array_index(batch, i);
             PathEntry *e = find_entry_locked(self, item->ifname);
-            if (e != NULL) {
+            if (e != NULL && e->info != NULL &&
+                e->info->state != MULTIWIFI_PATH_STATE_OFFLINE &&
+                g_strcmp0(e->info->source_ip, item->source_ip) == 0 &&
+                g_strcmp0(e->info->gateway, item->gateway) == 0) {
                 update_path_entry_result(self, e, item->success, item->measured_rtt);
             }
         }

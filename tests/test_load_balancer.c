@@ -218,7 +218,7 @@ static gpointer worker_thread(gpointer user_data)
     for (gint i = 0; i < td->iterations; i++) {
         multiwifi_scheduler_select_mark(td->sched);
         if ((i % 50) == 0) {
-            multiwifi_scheduler_set_weight(td->sched, "wlp0s20f3", 100 + (i % 200));
+            multiwifi_scheduler_set_weight(td->sched, "wlp0s20f3", (guint)(100 + (i % 200)));
         }
     }
     return NULL;

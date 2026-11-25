@@ -217,6 +217,36 @@ static void test_frame_parser_garbage_recovery(void)
     g_byte_array_free(stream, TRUE);
 }
 
+static void test_frame_parser_bad_version_resync(void)
+{
+    GByteArray *bad_frame = multiwifi_frame_encode_ping(10, 1234ULL);
+    /* Corrupt version byte at offset 4 right after magic "MWBF" */
+    bad_frame->data[4] = 0x99;
+
+    GByteArray *good_frame = multiwifi_frame_encode_ping(77, 5678ULL);
+
+    GByteArray *stream = g_byte_array_sized_new(bad_frame->len + good_frame->len);
+    g_byte_array_append(stream, bad_frame->data, bad_frame->len);
+    g_byte_array_append(stream, good_frame->data, good_frame->len);
+
+    MultiWifiFrameParser *parser = multiwifi_frame_parser_new();
+    GList *frames = multiwifi_frame_parser_feed(parser, stream->data, stream->len, NULL);
+
+    g_assert_nonnull(frames);
+    g_assert_cmpuint(g_list_length(frames), ==, 1);
+
+    MultiWifiFrame *f = (MultiWifiFrame *)frames->data;
+    g_assert_cmpuint(f->type, ==, MULTIWIFI_FRAME_PING);
+    g_assert_cmpuint(f->sequence, ==, 77);
+
+    multiwifi_frame_free(f);
+    g_list_free(frames);
+    multiwifi_frame_parser_free(parser);
+    g_byte_array_free(bad_frame, TRUE);
+    g_byte_array_free(good_frame, TRUE);
+    g_byte_array_free(stream, TRUE);
+}
+
 /* 2. TUN Device abstraction test */
 
 static void test_tun_device_mock_read_write(void)
@@ -602,6 +632,22 @@ static void test_dbus_bonding_api_validation(void)
     g_free(remote_err);
     g_clear_error(&err);
 
+    /* 2b. Call StartBonding with whitespace-only host/token -> InvalidArgument */
+    GVariantBuilder bw;
+    g_variant_builder_init(&bw, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&bw, "{sv}", "server_host", g_variant_new_string("   "));
+    g_variant_builder_add(&bw, "{sv}", "token", g_variant_new_string("  \t "));
+    reply = call_dbus_iterative(
+        conn, "StartBonding", g_variant_new("(@a{sv})", g_variant_builder_end(&bw)),
+        G_VARIANT_TYPE("(s)"), &err
+    );
+    g_assert_nonnull(err);
+    g_assert_null(reply);
+    remote_err = g_dbus_error_get_remote_error(err);
+    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+    g_free(remote_err);
+    g_clear_error(&err);
+
     /* 3. Call StopBonding when idle -> clean success */
     reply = call_dbus_iterative(
         conn, "StopBonding", NULL, G_VARIANT_TYPE("(s)"), &err
@@ -624,6 +670,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/bonding/frame_streaming_one_byte", test_frame_streaming_one_byte_at_a_time);
     g_test_add_func("/bonding/frame_multiple_concatenated", test_frame_multiple_frames_concatenated);
     g_test_add_func("/bonding/frame_parser_garbage_recovery", test_frame_parser_garbage_recovery);
+    g_test_add_func("/bonding/frame_parser_bad_version_resync", test_frame_parser_bad_version_resync);
     g_test_add_func("/bonding/tun_device_mock_read_write", test_tun_device_mock_read_write);
     g_test_add_func("/bonding/loop_prevention_netns", test_loop_prevention_netns);
     g_test_add_func("/bonding/client_mock_server_handshake", test_bonding_client_mock_server_handshake);

@@ -61,6 +61,7 @@ gboolean multiwifi_firewall_apply(MultiWifiFirewall *self,
     g_string_append(rules, "        udp dport { 67, 68, 546, 547 } accept\n");
     g_string_append(rules, "        meta mark & 0xff00 != 0 accept\n");
     g_string_append(rules, "        ip6 version 6 drop\n");
+    g_string_append(rules, "        ct mark & 0xff00 != 0 meta mark set ct mark accept\n");
 
     if (marks->len == 1) {
         uint32_t single_mark = g_array_index(marks, uint32_t, 0);
@@ -119,6 +120,7 @@ gboolean multiwifi_firewall_apply(MultiWifiFirewall *self,
         g_string_append_printf(rules, "        meta mark 0 meta mark set 0x%x\n", default_mark);
     }
 
+    g_string_append(rules, "        meta mark & 0xff00 != 0 ct mark set meta mark\n");
     g_string_append(rules, "    }\n}\n");
 
     struct nft_ctx *nft = nft_ctx_new(NFT_CTX_DEFAULT);
@@ -147,6 +149,8 @@ gboolean multiwifi_firewall_apply(MultiWifiFirewall *self,
 
     /* Phase 2: Postrouting SNAT/Masquerade for multi-WAN and foreign ISP compatibility */
     const char *nat_rules =
+        "add table ip " MULTIWIFI_NFT_TABLE_NAME "\n"
+        "flush table ip " MULTIWIFI_NFT_TABLE_NAME "\n"
         "table ip " MULTIWIFI_NFT_TABLE_NAME " {\n"
         "    chain postrouting {\n"
         "        type nat hook postrouting priority 100; policy accept;\n"

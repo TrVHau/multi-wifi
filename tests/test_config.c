@@ -143,6 +143,33 @@ static void test_config_reject_invalid_range(void)
     g_error_free(error);
 }
 
+static void test_config_reject_non_numeric_and_overflow(void)
+{
+    const gchar *garbage_toml =
+        "schema_version = 1\n"
+        "mode = \"load_balance\"\n"
+        "[load_balance]\n"
+        "cooldown_ms = 500abc\n";
+
+    GError *error = NULL;
+    MultiWifiConfig *cfg = multiwifi_config_parse_string(garbage_toml, &error);
+    g_assert_null(cfg);
+    g_assert_error(error, MULTIWIFI_CONFIG_ERROR, MULTIWIFI_CONFIG_ERROR_VALIDATION);
+    g_clear_error(&error);
+
+    /* 2^32 + 1000 would silently wrap to 1000 under naive uint64->guint cast */
+    const gchar *overflow_toml =
+        "schema_version = 1\n"
+        "mode = \"load_balance\"\n"
+        "[load_balance]\n"
+        "health_check_interval_ms = 4294968296\n";
+
+    cfg = multiwifi_config_parse_string(overflow_toml, &error);
+    g_assert_null(cfg);
+    g_assert_error(error, MULTIWIFI_CONFIG_ERROR, MULTIWIFI_CONFIG_ERROR_VALIDATION);
+    g_clear_error(&error);
+}
+
 int main(int argc, char *argv[])
 {
     g_test_init(&argc, &argv, NULL);
@@ -153,6 +180,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/config/reject_bad_schema_version", test_config_reject_bad_schema_version);
     g_test_add_func("/config/reject_duplicate_uplinks", test_config_reject_duplicate_uplinks);
     g_test_add_func("/config/reject_invalid_range", test_config_reject_invalid_range);
+    g_test_add_func("/config/reject_non_numeric_and_overflow", test_config_reject_non_numeric_and_overflow);
 
     return g_test_run();
 }
