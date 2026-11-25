@@ -74,7 +74,7 @@ MultiWiFi was benchmarked on bare-metal hardware with dual active physical Wi-Fi
 | **Packet Loss & Spike Immunity** | 87.6 ms avg, **20% loss, 244 ms max** (Viettel) | **25.80 ms avg, 0% loss, 0.78 ms jitter** (FPT) | Diverts latency-sensitive flows away from degraded path |
 | **Scheduler Microbenchmark (C)** | N/A | **17.40M flows/s (`57.47 ns/decision`)** | Verified in `tests/test_load_balancer.c` (`-O2`) |
 | **Bonding Parser (C)** | N/A | **1,465 MB/s (~11.72 Gbps)** | Verified in `tests/test_bonding.c` (`-O2`) |
-| **D-Bus IPC Roundtrip (C)** | N/A | **437 µs** | Verified in `tests/test_dbus_daemon.c` |
+| **D-Bus IPC Roundtrip (C baseline)** | N/A | **437 µs** | Historical `GDBus` baseline (Rust daemon verified via `test_rust_parity`) |
 | **Rust Daemon Footprint** | N/A | **9.30–9.86 MB RSS**, **8.23 MB** bin (`6.20 MB` stripped) | Zero GLib/libnm runtime dependency (`multiwifi-daemon`) |
 | **Test Coverage** | N/A | **48 Rust tests + 10 CTest suites (100% pass)** | Includes live C `GDBus` $\leftrightarrow$ Rust daemon parity & ASan checks |
 
@@ -166,7 +166,7 @@ MultiWiFi was benchmarked on bare-metal hardware with dual active physical Wi-Fi
   - `gtk4` ($\ge$ 4.10) — used by `multiwifi-gui`
   - `libnm` ($\ge$ 1.40) + running `NetworkManager` — GUI Wi-Fi scanning; Rust daemon queries `NetworkManager` directly over System D-Bus with `/proc/net/route` fallback
   - `libnftables` ($\ge$ 1.0.2) — `nftables` transaction execution in `multiwifi-core` / `multiwifi-daemon`
-  - `polkit` (`polkitd` runtime + `polkit-gobject-1` for CMake fallback/tests)
+  - `polkit` (`polkitd` runtime over System D-Bus — no `polkit-gobject-1` build dependency)
 - **Hardware:** At least two network interfaces (e.g., internal PCIe Wi-Fi + USB Wi-Fi dongle or USB tethering).
 
 ---
@@ -212,7 +212,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
-# 3. Configure & build C11 GUI + Rust daemon (via CMake MULTIWIFI_RUST_DAEMON=ON)
+# 3. Configure & build C11 GUI + Rust daemon (cmake builds both)
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build -j$(nproc)
 
@@ -220,7 +220,7 @@ cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
 ```
 
-*(Pass `-DMULTIWIFI_RUST_DAEMON=OFF` to build the legacy C daemon fallback instead of the Rust daemon, e.g. for C ASan/UBSan builds.)*
+*(Pass `-DMULTIWIFI_BUILD_DAEMON=OFF` only when running standalone C GUI/test compiler or ASan checks without rebuilding the Rust daemon.)*
 
 ---
 
@@ -366,7 +366,7 @@ MultiWiFi enforces two automated verification layers covering happy paths, symli
 | `test_capabilities` | Kernel capabilities | Safe probing, secret redaction filters |
 | `test_wifi_device` | `libnm` inventory & mapping | Interface state transitions, lifecycle management |
 | `test_path_monitor` | Link quality & RTT | Socket probe fallback (`53 -> 80 -> 443`), jitter, hysteresis |
-| `test_dbus_daemon` | Daemon IPC & Polkit | Lifecycle state machine, DNS methods, bounded queue |
+| `test_operation` | Operation lifecycle | C operation state transitions and rollback tracking |
 | `test_routing_manager` | Transactional routing | Isolated netns, journal persistence, atomic rollback |
 | `test_load_balancer` | WRR & `nftables` | Concurrency safety, GCD normalization, dual-table teardown |
 | `test_bonding` | MPTCP & TUN aggregation | Frame parsing (`0x4d574631`), garbage recovery, anti-spoofing |

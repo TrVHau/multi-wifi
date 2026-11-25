@@ -39,12 +39,12 @@ MultiWiFi enforces 10 CTest regression, integration parity, and packaging verifi
 | **`test_capabilities`** | Safe kernel probing and logging secret-redaction checks. |
 | **`test_wifi_device`** | `libnm` device inventory structs and state transitions. |
 | **`test_path_monitor`** | Hysteresis state machine, RTT smoothing, and mock socket probes. |
-| **`test_dbus_daemon`** | Legacy C daemon D-Bus IPC, signals, Polkit denial, and DNS symlink hardening parity. |
+| **`test_operation`** | C operation lifecycle queue (`operation.c`: state transitions, pruning, rollback failure transitions). |
 | **`test_routing_manager`** | Isolated namespace routing transactions, journal persistence, atomic rollback, crash recovery. |
 | **`test_load_balancer`** | WRR scheduling, GCD normalization, concurrency, and netfilter dual-table teardown. |
 | **`test_bonding`** | Framing (`0x4d574631`), mock TUN, loop prevention, and mock server handshake. |
 | **`test_packaging`** | D-Bus policy XML, Polkit rules, systemd unit sandboxing, desktop isolation, Arch/Debian/RPM manifests, and portable GUI AppDir isolation. |
-| **`test_rust_parity`** | Live C `GDBusConnection` $\leftrightarrow$ compiled Rust `multiwifi-daemon` parity on an isolated `dbus-daemon`: XML introspection contract matching `data/io.github.multiwifi.Daemon1.xml`, status/capabilities/paths schemas, signals, rate limits, DNS `O_NOFOLLOW`, `Polkit` enforcement, `SIGTERM`/`StopDaemon` clean exit, and C/Rust config & journal format parity (`MULTIWIFI_RUST_DAEMON=ON`). |
+| **`test_rust_parity`** | Live C `GDBusConnection` $\leftrightarrow$ compiled Rust `multiwifi-daemon` parity on an isolated `dbus-daemon`: XML introspection contract matching `data/io.github.multiwifi.Daemon1.xml`, status/capabilities/paths schemas, signals, rate limits, DNS `O_NOFOLLOW`, `Polkit` enforcement, `SIGTERM`/`StopDaemon` clean exit, and C/Rust config & journal format parity (`MULTIWIFI_BUILD_DAEMON=ON`). |
 
 ---
 
@@ -64,14 +64,14 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure --verbose
 
 # Optional Clang C11 toolchain check (C GUI + core regression suites)
-CC=clang cmake -B build-clang -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DMULTIWIFI_RUST_DAEMON=OFF
+CC=clang cmake -B build-clang -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DMULTIWIFI_BUILD_DAEMON=OFF
 cmake --build build-clang -j"$(nproc)"
 ctest --test-dir build-clang --output-on-failure --verbose
 ```
 
 ### Memory Safety & Sanitizer Verification (ASan / LSan / UBSan on C Modules)
 ```bash
-cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DMULTIWIFI_RUST_DAEMON=OFF \
+cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DMULTIWIFI_BUILD_DAEMON=OFF \
   -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 cmake --build build-asan -j"$(nproc)"

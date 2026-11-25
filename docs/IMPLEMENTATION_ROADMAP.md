@@ -1,6 +1,6 @@
 # MultiWiFi Implementation Roadmap & Milestones
 
-This document records the completion status and architectural evolution of MultiWiFi from its initial C11 implementation (Phases 0–7) through the ongoing Strangler Fig Rust migration ([ADR-013](ADR/ADR-013-rust-migration.md)).
+This document records the completed milestones and architectural evolution of MultiWiFi from its initial C11 implementation (Phases 0–7) through the completed Strangler Fig Rust migration (Phases 0–5, [ADR-013](ADR/ADR-013-rust-migration.md)).
 
 ---
 
@@ -13,7 +13,7 @@ This document records the completion status and architectural evolution of Multi
 | **Phase 2** | **Network Engine & Kernel Primitives** | **COMPLETED** | `capabilities.rs`, `firewall.rs` (`libnftables` FFI + `table inet/ip multiwifi`), `netlink_route.rs` (`rtnetlink` tables `10001+`), `loop_prevention.rs`, `routing_manager.rs`, `path_monitor.rs`, `tun_device.rs` (`mwtun0`), `bonding_client.rs` (38 core tests passing). |
 | **Phase 3** | **Privileged System Daemon (`multiwifi-daemon`)** | **COMPLETED** | Async `tokio` + `zbus` service implementing `io.github.multiwifi.Daemon1` (`service.rs`), Polkit v1 check (`polkit.rs`), `NetworkManager` D-Bus inventory + kernel fallback (`nm_client.rs`), bounded `OpManager` (`operation.rs`), symlink-safe DNS (`dns.rs`); wired into CMake, `setup.sh`, CI, and packaging. |
 | **Phase 4** | **Integration Parity & Cutover Stabilization** | **COMPLETED** | Runtime `/etc/multiwifi/multiwifi.conf` (`MULTIWIFI_CONFIG_PATH`) loading + `NmInventory` $\rightarrow$ `PathMonitor` live sync (`service.rs`), live cross-language C `GDBusConnection` $\leftrightarrow$ Rust daemon binary parity suite (`test_rust_parity` covering introspection XML, IPC contract, signals, DNS hardening, and Polkit denial across `10/10` CTest suites + `48/48` Rust tests), `rustfmt` check, and GCC + Clang + ASan/UBSan multi-toolchain CI hardening. |
-| **Phase 5** | **Legacy C Core Deprecation & Release Cleanup** | **PLANNED** | Retire redundant legacy C daemon code paths once production soak testing completes while retaining C11 + GTK4 for `multiwifi-gui`. |
+| **Phase 5** | **Legacy C Core Deprecation & Release Cleanup** | **COMPLETED** | Retired legacy C daemon (`src/daemon/main.c`, `src/daemon/service.c`, `include/multiwifi/daemon/service.h`), removed build-time `polkit-gobject-1` dependency across CMake/CI/Debian/RPM specs, replaced `MULTIWIFI_RUST_DAEMON` fallback with canonical Rust daemon builds (`MULTIWIFI_BUILD_DAEMON=ON`), promoted remaining D-Bus assertions to `test_rust_parity`, split `test_operation` for C operation queue ASan coverage, and gated legacy C core libraries strictly to `BUILD_TESTING=ON` while retaining C11 + GTK4 for `multiwifi-gui`. |
 
 ---
 

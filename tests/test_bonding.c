@@ -14,8 +14,6 @@
 #include "multiwifi/core/tun_device.h"
 #include "multiwifi/core/loop_prevention.h"
 #include "multiwifi/core/bonding_client.h"
-#include "multiwifi/daemon/service.h"
-#include "multiwifi/shared/dbus_defs.h"
 
 static gboolean enter_isolated_network_namespace(void)
 {
@@ -520,147 +518,6 @@ static void test_bonding_client_mock_server_handshake(void)
     mock_server_stop(srv);
 }
 
-/* 5. D-Bus Daemon Bonding API tests */
-
-typedef struct {
-    gboolean done;
-    GVariant *reply;
-    GError *error;
-} AsyncCallCtx;
-
-static void on_async_call_done(GObject *source, GAsyncResult *res, gpointer user_data)
-{
-    AsyncCallCtx *ctx = (AsyncCallCtx *)user_data;
-    ctx->reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &ctx->error);
-    ctx->done = TRUE;
-}
-
-static GVariant *call_dbus_iterative(GDBusConnection *conn,
-                                     const gchar *method_name,
-                                     GVariant *parameters,
-                                     const GVariantType *reply_type,
-                                     GError **error)
-{
-    AsyncCallCtx ctx = { .done = FALSE, .reply = NULL, .error = NULL };
-
-    g_dbus_connection_call(
-        conn,
-        MULTIWIFI_DBUS_NAME,
-        MULTIWIFI_DBUS_PATH,
-        MULTIWIFI_DBUS_INTERFACE,
-        method_name,
-        parameters,
-        reply_type,
-        G_DBUS_CALL_FLAGS_NONE,
-        2000,
-        NULL,
-        on_async_call_done,
-        &ctx
-    );
-
-    GMainContext *main_ctx = g_main_context_default();
-    while (!ctx.done) {
-        g_main_context_iteration(main_ctx, TRUE);
-    }
-
-    if (ctx.error != NULL) {
-        g_propagate_error(error, ctx.error);
-        return NULL;
-    }
-
-    return ctx.reply;
-}
-
-static void test_dbus_bonding_api_validation(void)
-{
-    MultiWifiDaemonService *service = multiwifi_daemon_service_new(G_BUS_TYPE_SESSION, FALSE);
-    g_assert_nonnull(service);
-
-    GError *err = NULL;
-    gboolean ok = multiwifi_daemon_service_start(service, &err);
-    if (!ok) {
-        g_test_skip("Session D-Bus not available");
-        g_object_unref(service);
-        return;
-    }
-
-    GDBusConnection *conn = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &err);
-    g_assert_no_error(err);
-    g_assert_nonnull(conn);
-
-    GMainContext *main_ctx = g_main_context_default();
-    for (int i = 0; i < 20; i++) {
-        g_main_context_iteration(main_ctx, FALSE);
-        g_usleep(10000);
-    }
-
-    /* 1. Query GetStatus for bonding fields */
-    GVariant *reply = call_dbus_iterative(
-        conn, "GetStatus", NULL, G_VARIANT_TYPE("(a{sv})"), &err
-    );
-    g_assert_no_error(err);
-    g_assert_nonnull(reply);
-
-    GVariant *dict = NULL;
-    g_variant_get(reply, "(@a{sv})", &dict);
-
-    GVariant *b_act = g_variant_lookup_value(dict, "bonding_active", G_VARIANT_TYPE_BOOLEAN);
-    g_assert_nonnull(b_act);
-    g_assert_false(g_variant_get_boolean(b_act));
-    g_variant_unref(b_act);
-
-    GVariant *b_st = g_variant_lookup_value(dict, "bonding_state", G_VARIANT_TYPE_STRING);
-    g_assert_nonnull(b_st);
-    g_assert_cmpstr(g_variant_get_string(b_st, NULL), ==, "Disconnected");
-    g_variant_unref(b_st);
-
-    g_variant_unref(dict);
-    g_variant_unref(reply);
-
-    /* 2. Call StartBonding with missing parameters -> InvalidArgument */
-    GVariantBuilder b;
-    g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
-    reply = call_dbus_iterative(
-        conn, "StartBonding", g_variant_new("(@a{sv})", g_variant_builder_end(&b)),
-        G_VARIANT_TYPE("(s)"), &err
-    );
-    g_assert_nonnull(err);
-    g_assert_null(reply);
-    g_assert_true(g_dbus_error_is_remote_error(err));
-    gchar *remote_err = g_dbus_error_get_remote_error(err);
-    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_INVALID_ARGUMENT);
-    g_free(remote_err);
-    g_clear_error(&err);
-
-    /* 2b. Call StartBonding with whitespace-only host/token -> InvalidArgument */
-    GVariantBuilder bw;
-    g_variant_builder_init(&bw, G_VARIANT_TYPE("a{sv}"));
-    g_variant_builder_add(&bw, "{sv}", "server_host", g_variant_new_string("   "));
-    g_variant_builder_add(&bw, "{sv}", "token", g_variant_new_string("  \t "));
-    reply = call_dbus_iterative(
-        conn, "StartBonding", g_variant_new("(@a{sv})", g_variant_builder_end(&bw)),
-        G_VARIANT_TYPE("(s)"), &err
-    );
-    g_assert_nonnull(err);
-    g_assert_null(reply);
-    remote_err = g_dbus_error_get_remote_error(err);
-    g_assert_cmpstr(remote_err, ==, MULTIWIFI_ERROR_INVALID_ARGUMENT);
-    g_free(remote_err);
-    g_clear_error(&err);
-
-    /* 3. Call StopBonding when idle -> clean success */
-    reply = call_dbus_iterative(
-        conn, "StopBonding", NULL, G_VARIANT_TYPE("(s)"), &err
-    );
-    g_assert_no_error(err);
-    g_assert_nonnull(reply);
-    g_variant_unref(reply);
-
-    g_object_unref(conn);
-    multiwifi_daemon_service_stop(service);
-    g_object_unref(service);
-}
-
 int main(int argc, char *argv[])
 {
     g_test_init(&argc, &argv, NULL);
@@ -674,7 +531,6 @@ int main(int argc, char *argv[])
     g_test_add_func("/bonding/tun_device_mock_read_write", test_tun_device_mock_read_write);
     g_test_add_func("/bonding/loop_prevention_netns", test_loop_prevention_netns);
     g_test_add_func("/bonding/client_mock_server_handshake", test_bonding_client_mock_server_handshake);
-    g_test_add_func("/bonding/dbus_api_validation", test_dbus_bonding_api_validation);
 
     return g_test_run();
 }

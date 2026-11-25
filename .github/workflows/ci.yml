@@ -25,7 +25,6 @@ jobs:
             libglib2.0-dev \
             libgtk-4-dev \
             libnm-dev \
-            libpolkit-gobject-1-dev \
             libnftables-dev \
             dbus \
             dbus-daemon \
@@ -55,13 +54,13 @@ jobs:
 
       - name: Verify C11 Build with Clang
         run: |
-          CC=clang cmake -B build-clang -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DMULTIWIFI_RUST_DAEMON=OFF
+          CC=clang cmake -B build-clang -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DMULTIWIFI_BUILD_DAEMON=OFF
           cmake --build build-clang
           ctest --test-dir build-clang --output-on-failure --verbose
 
       - name: Test C AddressSanitizer & UndefinedBehaviorSanitizer
         run: |
-          cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DMULTIWIFI_RUST_DAEMON=OFF \
+          cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DMULTIWIFI_BUILD_DAEMON=OFF \
             -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           cmake --build build-asan

@@ -15,7 +15,6 @@ BuildRequires:  pkgconfig
 BuildRequires:  gtk4-devel >= 4.10
 BuildRequires:  glib2-devel >= 2.74
 BuildRequires:  NetworkManager-libnm-devel >= 1.40
-BuildRequires:  polkit-devel
 BuildRequires:  libnftables-devel
 BuildRequires:  systemd-rpm-macros
 

@@ -10,7 +10,6 @@ Build-Depends: debhelper-compat (= 13),
                libgtk-4-dev (>= 4.10),
                libglib2.0-dev (>= 2.74),
                libnm-dev (>= 1.40),
-               libpolkit-gobject-1-dev,
                libnftables-dev
 Standards-Version: 4.6.2
 Homepage: https://github.com/TrVHau/multi-wifi

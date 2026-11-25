@@ -152,7 +152,7 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 **Objective:** Measure communication latency between the unprivileged GUI and the privileged `multiwifi-daemon`.
 
 **Methodology:**
-- Test suite: `tests/test_dbus_daemon.c`.
+- Test suite: historical `test_dbus_daemon` baseline (superseded by live `tests/test_rust_parity.c` + Rust `zbus` daemon tests).
 - Tool: `GDBusConnection` synchronous and asynchronous method calls (`GetStatus`, `GetDNS`, `RunDiagnostics`).
 
 **Measured Data:**
@@ -200,8 +200,8 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
   - `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`: **0 issues / 0 warnings**.
   - `cargo test --workspace`: **48/48 tests passed** (`38` in `multiwifi-core` in **0.21 s**, `10` in `multiwifi-daemon` in **0.09 s**).
 - **C11 GUI, C Core Sanitizers & Live Parity (`ctest`):**
-  - ASan + LSan + UBSan (`-DMULTIWIFI_RUST_DAEMON=OFF`, `9/9` C suites): **0 bytes leaked / 0 UB errors** (`2.28 s`).
-  - Release build (`MULTIWIFI_RUST_DAEMON=ON`, `10/10` CTest suites including `test_rust_parity`): **10/10 (100%)** in **2.11 s**.
+  - ASan + LSan + UBSan (`-DMULTIWIFI_BUILD_DAEMON=OFF`, `9/9` C suites): **0 bytes leaked / 0 UB errors**.
+  - Release build (`MULTIWIFI_BUILD_DAEMON=ON`, `10/10` CTest suites including `test_rust_parity`): **10/10 (100%)**.
 
 ---
 

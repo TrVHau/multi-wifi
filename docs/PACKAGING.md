@@ -55,7 +55,7 @@ All packages distribute the unprivileged **C11/GTK4 desktop GUI (`multiwifi-gui`
 
 ## 3. Building Packages
 
-CMake compiles both `multiwifi-gui` (C11/GTK4) and `multiwifi-daemon` (`cargo build --release -p multiwifi-daemon`) automatically when `MULTIWIFI_RUST_DAEMON=ON` (default).
+CMake compiles `multiwifi-gui` (C11/GTK4) together with the Rust system daemon (`cargo build --release -p multiwifi-daemon`) whenever `MULTIWIFI_BUILD_DAEMON=ON` (default). When `BUILD_TESTING=OFF`, legacy C test-only core modules are skipped completely.
 
 ### Arch Linux (`PKGBUILD`)
 ```bash

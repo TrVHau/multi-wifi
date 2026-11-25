@@ -444,9 +444,11 @@ static void test_introspection_and_read_contract(void)
     g_assert_true(g_variant_lookup(status_dict, "bonding_active", "b", &bonding_active));
     g_assert_false(bonding_active);
     g_assert_true(g_variant_lookup(status_dict, "bonding_state", "&s", &bstate));
+    g_assert_cmpstr(bstate, ==, "Disconnected");
     g_assert_true(g_variant_lookup(status_dict, "bonding_mptcp", "b", &bonding_mptcp));
     g_assert_true(g_variant_lookup(status_dict, "bonding_virtual_ip", "&s", &vip));
     g_assert_true(g_variant_lookup(status_dict, "eligible_uplinks", "u", &eligible_uplinks));
+    g_assert_cmpuint(eligible_uplinks, ==, 0);
     g_assert_true(g_variant_lookup(status_dict, "polkit_enforced", "b", &polkit_enforced));
     g_assert_false(polkit_enforced);
 
@@ -606,7 +608,29 @@ static void test_mutating_methods_signals_and_dns(void)
     g_assert_no_error(err);
     g_variant_unref(reply);
 
-    /* StartBonding rejects invalid payload cleanly */
+    /* StartBonding rejects empty, missing, and whitespace-only payloads cleanly */
+    GVariantBuilder empty_bond;
+    g_variant_builder_init(&empty_bond, G_VARIANT_TYPE("a{sv}"));
+    reply = g_dbus_connection_call_sync(
+        conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
+        "StartBonding", g_variant_new("(@a{sv})", g_variant_builder_end(&empty_bond)),
+        G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
+    );
+    g_assert_null(reply);
+    assert_dbus_remote_error(&err, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+
+    GVariantBuilder ws_bond;
+    g_variant_builder_init(&ws_bond, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&ws_bond, "{sv}", "server_host", g_variant_new_string("   "));
+    g_variant_builder_add(&ws_bond, "{sv}", "token", g_variant_new_string("  \t "));
+    reply = g_dbus_connection_call_sync(
+        conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
+        "StartBonding", g_variant_new("(@a{sv})", g_variant_builder_end(&ws_bond)),
+        G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
+    );
+    g_assert_null(reply);
+    assert_dbus_remote_error(&err, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+
     GVariantBuilder bad_bond;
     g_variant_builder_init(&bad_bond, G_VARIANT_TYPE("a{sv}"));
     g_variant_builder_add(&bad_bond, "{sv}", "server_host", g_variant_new_string("127.0.0.1"));
@@ -695,7 +719,16 @@ static void test_mutating_methods_signals_and_dns(void)
     g_assert_null(reply);
     assert_dbus_remote_error(&err, MULTIWIFI_ERROR_BUSY);
 
-    /* 4. DNS workflow & symlink hardening through GDBus */
+    /* Non-existent operation ID must return InvalidArgument */
+    reply = g_dbus_connection_call_sync(
+        conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
+        "GetDiagnostics", g_variant_new("(s)", "00000000-0000-0000-0000-000000000000"),
+        G_VARIANT_TYPE("(a{sv})"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
+    );
+    g_assert_null(reply);
+    assert_dbus_remote_error(&err, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+
+    /* 4. DNS workflow, validation bounds & symlink hardening through GDBus */
     reply = g_dbus_connection_call_sync(
         conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
         "GetDNS", NULL, G_VARIANT_TYPE("(asb)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
@@ -707,6 +740,41 @@ static void test_mutating_methods_signals_and_dns(void)
     g_assert_false(is_custom);
     g_variant_iter_free(iter);
     g_variant_unref(reply);
+
+    GVariantBuilder bad_ip_dns;
+    g_variant_builder_init(&bad_ip_dns, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&bad_ip_dns, "s", "invalid.not.an.ip");
+    reply = g_dbus_connection_call_sync(
+        conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
+        "SetDNS", g_variant_new("(@as)", g_variant_builder_end(&bad_ip_dns)),
+        G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
+    );
+    g_assert_null(reply);
+    assert_dbus_remote_error(&err, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+
+    GVariantBuilder empty_dns;
+    g_variant_builder_init(&empty_dns, G_VARIANT_TYPE("as"));
+    reply = g_dbus_connection_call_sync(
+        conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
+        "SetDNS", g_variant_new("(@as)", g_variant_builder_end(&empty_dns)),
+        G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
+    );
+    g_assert_null(reply);
+    assert_dbus_remote_error(&err, MULTIWIFI_ERROR_INVALID_ARGUMENT);
+
+    GVariantBuilder too_many_dns;
+    g_variant_builder_init(&too_many_dns, G_VARIANT_TYPE("as"));
+    for (int i = 0; i < 17; i++) {
+        g_autofree gchar *ip = g_strdup_printf("1.1.1.%d", i + 1);
+        g_variant_builder_add(&too_many_dns, "s", ip);
+    }
+    reply = g_dbus_connection_call_sync(
+        conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
+        "SetDNS", g_variant_new("(@as)", g_variant_builder_end(&too_many_dns)),
+        G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
+    );
+    g_assert_null(reply);
+    assert_dbus_remote_error(&err, MULTIWIFI_ERROR_INVALID_ARGUMENT);
 
     GVariantBuilder cf_dns;
     g_variant_builder_init(&cf_dns, G_VARIANT_TYPE("as"));

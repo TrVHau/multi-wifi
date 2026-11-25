@@ -14,9 +14,9 @@ add_executable(test_path_monitor test_path_monitor.c)
 target_link_libraries(test_path_monitor PRIVATE multiwifi-core)
 add_test(NAME test_path_monitor COMMAND test_path_monitor)
 
-add_executable(test_dbus_daemon test_dbus_daemon.c)
-target_link_libraries(test_dbus_daemon PRIVATE multiwifi-core)
-add_test(NAME test_dbus_daemon COMMAND test_dbus_daemon)
+add_executable(test_operation test_operation.c)
+target_link_libraries(test_operation PRIVATE multiwifi-core)
+add_test(NAME test_operation COMMAND test_operation)
 
 add_executable(test_routing_manager test_routing_manager.c)
 target_link_libraries(test_routing_manager PRIVATE multiwifi-core)
@@ -38,7 +38,7 @@ target_compile_definitions(test_packaging PRIVATE
 target_link_libraries(test_packaging PRIVATE multiwifi-core)
 add_test(NAME test_packaging COMMAND test_packaging)
 
-if(MULTIWIFI_RUST_DAEMON)
+if(MULTIWIFI_BUILD_DAEMON)
     add_executable(test_rust_parity test_rust_parity.c)
     add_dependencies(test_rust_parity multiwifi-daemon-rust)
     target_compile_definitions(test_rust_parity PRIVATE
