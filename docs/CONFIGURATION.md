@@ -8,7 +8,7 @@ This document describes the configuration file format, TOML schema specification
 
 | Path | Purpose | Ownership / Permissions |
 | :--- | :--- | :--- |
-| `/etc/multiwifi/multiwifi.conf` | Primary system configuration file (TOML, no secrets) | `root:root` (`0644`) |
+| `/etc/multiwifi/multiwifi.conf` | Primary system configuration file (TOML, no secrets; loaded at daemon startup or via `MULTIWIFI_CONFIG_PATH`) | `root:root` (`0644`) |
 | `/run/multiwifi/journals/` | Ephemeral routing journals for atomic rollback | `root:root` (`0700`) |
 | `/etc/NetworkManager/conf.d/99-multiwifi-dns.conf` | Managed NetworkManager global DNS drop-in | `root:root` (`0644`) |
 | `/run/multiwifi/resolv.conf.bak` | Automatic backup of static `/etc/resolv.conf` | `root:root` (`0644`) |
@@ -31,10 +31,10 @@ mode = "load_balance"              # Options: "load_balance", "bonding", "none"
 
 [load_balance]
 strategy = "weighted_round_robin"  # Supported strategy
-health_check_interval_ms = 2000    # Interval in ms (500 - 30000)
-failure_threshold = 3              # Consecutive failures to drop link (1 - 10)
-recovery_threshold = 3             # Consecutive successes to recover link (1 - 10)
-cooldown_ms = 5000                 # Flapping cooldown period in ms (0 - 60000)
+health_check_interval_ms = 2000    # Interval in ms (100 - 60000)
+failure_threshold = 3              # Consecutive failures to drop link (1 - 50)
+recovery_threshold = 3             # Consecutive successes to recover link (1 - 50)
+cooldown_ms = 5000                 # Flapping cooldown period in ms (0 - 600000)
 
 [[uplinks]]
 device_id = "wlp0s20f3"
@@ -67,13 +67,13 @@ profile_id = "home-vpn-cluster"    # Non-secret profile identifier
 - **`strategy`** *(string, default: `"weighted_round_robin"`)*:
   - Traffic scheduling strategy (`"weighted_round_robin"`).
 - **`health_check_interval_ms`** *(integer, default: `2000`)*:
-  - Time between background socket health checks (`500..=30000` ms).
+  - Time between background socket health checks (`100..=60000` ms).
 - **`failure_threshold`** *(integer, default: `3`)*:
-  - Consecutive probe failures required to transition from `Online`/`Degraded` to `Local Only` (`1..=10`).
+  - Consecutive probe failures required to transition from `Online`/`Degraded` to `Local Only` (`1..=50`).
 - **`recovery_threshold`** *(integer, default: `3`)*:
-  - Consecutive probe successes required to promote back to `Online` (`1..=10`).
+  - Consecutive probe successes required to promote back to `Online` (`1..=50`).
 - **`cooldown_ms`** *(integer, default: `5000`)*:
-  - Delay before re-promoting a recently dropped path (`0..=60000` ms).
+  - Delay before re-promoting a recently dropped path (`0..=600000` ms).
 
 ---
 

@@ -102,9 +102,7 @@ fn build_inet_rules(marks: &[u32]) -> Result<String, FirewallError> {
         ));
     }
     if marks.contains(&0) {
-        return Err(FirewallError::InvalidArgument(
-            "fwmark must be non-zero",
-        ));
+        return Err(FirewallError::InvalidArgument("fwmark must be non-zero"));
     }
 
     let mut rules = String::with_capacity(1024);
@@ -372,8 +370,7 @@ mod tests {
 
                 if let Err(err) = fw.apply(&[0x1001]) {
                     let msg = err.to_string();
-                    if msg.contains("Operation not permitted")
-                        || msg.contains("Permission denied")
+                    if msg.contains("Operation not permitted") || msg.contains("Permission denied")
                     {
                         std::process::exit(0);
                     }

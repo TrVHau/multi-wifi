@@ -187,10 +187,9 @@ impl PathEntry {
             .iter()
             .filter(|&&ok| ok)
             .count();
-        self.info.packet_loss_percent = u32::try_from(
-            ((self.history_len - ok_count) * 100) / self.history_len.max(1),
-        )
-        .unwrap_or(100);
+        self.info.packet_loss_percent =
+            u32::try_from(((self.history_len - ok_count) * 100) / self.history_len.max(1))
+                .unwrap_or(100);
         self.info.last_probe_at = Some(now);
 
         if outcome.success {
@@ -358,7 +357,9 @@ impl PathMonitor {
                 entry.info.is_eligible = false;
                 entry.info.consecutive_successes = 0;
                 entry.info.consecutive_failures = 0;
-                input.status_reason.clone_into(&mut entry.info.status_reason);
+                input
+                    .status_reason
+                    .clone_into(&mut entry.info.status_reason);
             } else if matches!(entry.info.state, PathState::Offline | PathState::Unknown) {
                 entry.info.state = PathState::Probing;
                 "Connected locally; initiating health probes"
@@ -390,7 +391,11 @@ impl PathMonitor {
         }
         let snapshot = {
             let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some(existing) = guard.entries.iter_mut().find(|e| e.info.ifname == info.ifname) {
+            if let Some(existing) = guard
+                .entries
+                .iter_mut()
+                .find(|e| e.info.ifname == info.ifname)
+            {
                 existing.info = info.clone();
             } else {
                 let mut entry = PathEntry::new(&info.ifname);
@@ -599,7 +604,11 @@ async fn try_single_port_probe(
     }
 
     let remote = SocketAddr::V4(SocketAddrV4::new(dest_ip, port));
-    match tokio::time::timeout(Duration::from_millis(timeout_ms.max(1)), sock.connect(remote)).await
+    match tokio::time::timeout(
+        Duration::from_millis(timeout_ms.max(1)),
+        sock.connect(remote),
+    )
+    .await
     {
         Ok(Ok(_stream)) => true,
         // Even ECONNREFUSED means the gateway/host replied back cleanly.
@@ -751,14 +760,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let port = listener.local_addr().expect("addr").port();
 
-        assert!(
-            try_single_port_probe("", Some("127.0.0.1"), Ipv4Addr::LOCALHOST, port, 250).await
-        );
+        assert!(try_single_port_probe("", Some("127.0.0.1"), Ipv4Addr::LOCALHOST, port, 250).await);
 
         drop(listener);
         // Closed port returns ECONNREFUSED on loopback, proving reachability per C behavior
-        assert!(
-            try_single_port_probe("", Some("127.0.0.1"), Ipv4Addr::LOCALHOST, port, 250).await
-        );
+        assert!(try_single_port_probe("", Some("127.0.0.1"), Ipv4Addr::LOCALHOST, port, 250).await);
     }
 }

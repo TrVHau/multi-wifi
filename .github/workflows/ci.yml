@@ -18,6 +18,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
+            clang \
             cmake \
             ninja-build \
             pkg-config \
@@ -33,7 +34,10 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
+
+      - name: Check Rust Formatting
+        run: cargo fmt --all -- --check
 
       - name: Check Rust Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -41,14 +45,19 @@ jobs:
       - name: Run Rust Workspace Tests
         run: cargo test --workspace --verbose
 
-      - name: Configure CMake (GUI + Rust Daemon)
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Configure & Build CMake Release (GCC + Rust Daemon)
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build
 
-      - name: Build
-        run: cmake --build build
-
-      - name: Run C Test Suites
+      - name: Run Release CTest Suites (including live Rust parity)
         run: ctest --test-dir build --output-on-failure --verbose
+
+      - name: Verify C11 Build with Clang
+        run: |
+          CC=clang cmake -B build-clang -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DMULTIWIFI_RUST_DAEMON=OFF
+          cmake --build build-clang
+          ctest --test-dir build-clang --output-on-failure --verbose
 
       - name: Test C AddressSanitizer & UndefinedBehaviorSanitizer
         run: |

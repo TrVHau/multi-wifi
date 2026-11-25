@@ -363,7 +363,8 @@ weight = 2
             ConfigError::Validation(_)
         ));
 
-        let overflow = "schema_version = 1\n[load_balance]\nhealth_check_interval_ms = 4294968296\n";
+        let overflow =
+            "schema_version = 1\n[load_balance]\nhealth_check_interval_ms = 4294968296\n";
         assert!(matches!(
             MultiWifiConfig::parse_str(overflow).unwrap_err(),
             ConfigError::Validation(_)

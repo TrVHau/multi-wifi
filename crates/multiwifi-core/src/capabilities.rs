@@ -86,23 +86,26 @@ impl Capabilities {
             .ok()
             .map(|s| s.trim().to_owned());
 
-        let (kernel_mptcp, mptcp_details) =
-            match Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::from(IPPROTO_MPTCP))) {
-                Ok(_sock) => (
-                    CapState::AvailableInactive,
-                    format!(
-                        "Kernel MPTCP socket supported (sysctl enabled={})",
-                        sysctl_val.as_deref().unwrap_or("unknown")
-                    ),
+        let (kernel_mptcp, mptcp_details) = match Socket::new(
+            Domain::IPV4,
+            Type::STREAM,
+            Some(Protocol::from(IPPROTO_MPTCP)),
+        ) {
+            Ok(_sock) => (
+                CapState::AvailableInactive,
+                format!(
+                    "Kernel MPTCP socket supported (sysctl enabled={})",
+                    sysctl_val.as_deref().unwrap_or("unknown")
                 ),
-                Err(err) => (
-                    CapState::Unsupported,
-                    format!(
-                        "IPPROTO_MPTCP socket failed: {err} ({})",
-                        err.raw_os_error().unwrap_or(-1)
-                    ),
+            ),
+            Err(err) => (
+                CapState::Unsupported,
+                format!(
+                    "IPPROTO_MPTCP socket failed: {err} ({})",
+                    err.raw_os_error().unwrap_or(-1)
                 ),
-            };
+            ),
+        };
 
         Self {
             kernel_mptcp,
@@ -119,8 +122,7 @@ fn is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::metadata(path)
-            .is_ok_and(|m| m.is_file() && (m.permissions().mode() & 0o111 != 0))
+        fs::metadata(path).is_ok_and(|m| m.is_file() && (m.permissions().mode() & 0o111 != 0))
     }
     #[cfg(not(unix))]
     {

@@ -99,10 +99,7 @@ pub struct RoutingManager {
 }
 
 fn is_safe_iface_name(ifname: &str) -> bool {
-    !ifname.is_empty()
-        && !ifname.contains('/')
-        && !ifname.contains("..")
-        && !ifname.contains('\0')
+    !ifname.is_empty() && !ifname.contains('/') && !ifname.contains("..") && !ifname.contains('\0')
 }
 
 fn rp_filter_path(ifname: Option<&str>) -> Option<PathBuf> {
@@ -183,8 +180,8 @@ impl RoutingManager {
         if nix::unistd::Uid::effective().is_root() && Path::new("/run").is_dir() {
             PathBuf::from("/run/multiwifi/journals")
         } else {
-            let base = std::env::var_os("XDG_RUNTIME_DIR")
-                .map_or_else(std::env::temp_dir, PathBuf::from);
+            let base =
+                std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
             base.join("multiwifi").join("journals")
         }
     }
@@ -234,11 +231,7 @@ impl RoutingManager {
                 )));
             }
 
-            if u.fwmark > 0
-                && nl
-                    .verify_rule(Some(u.table_id), u.fwmark_rule_pref)
-                    .await?
-            {
+            if u.fwmark > 0 && nl.verify_rule(Some(u.table_id), u.fwmark_rule_pref).await? {
                 return Err(RoutingError::Conflict(format!(
                     "fwmark rule priority {} already exists in RPDB",
                     u.fwmark_rule_pref
@@ -248,11 +241,7 @@ impl RoutingManager {
         Ok(())
     }
 
-    pub async fn apply_plan(
-        &self,
-        op_id: &str,
-        plan: &mut RoutePlan,
-    ) -> Result<(), RoutingError> {
+    pub async fn apply_plan(&self, op_id: &str, plan: &mut RoutePlan) -> Result<(), RoutingError> {
         let mut state = self.state.lock().await;
 
         self.check_conflicts(plan).await?;
@@ -375,11 +364,7 @@ impl RoutingManager {
                     u.src_rule_pref
                 )));
             }
-            if u.fwmark > 0
-                && !nl
-                    .verify_rule(Some(u.table_id), u.fwmark_rule_pref)
-                    .await?
-            {
+            if u.fwmark > 0 && !nl.verify_rule(Some(u.table_id), u.fwmark_rule_pref).await? {
                 return Err(RoutingError::VerificationFailed(format!(
                     "fwmark rule pref {} not found in kernel RPDB",
                     u.fwmark_rule_pref

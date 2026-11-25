@@ -262,11 +262,12 @@ impl TunDevice {
         if self.fd.is_none() {
             return Err(TunError::NotOpen);
         }
-        let ipv4 = parse_ipv4_clean(ipv4_addr)
-            .map_err(|e| TunError::InvalidArgument(e.to_string()))?;
-        let mask: Ipv4Addr = netmask.trim().parse().map_err(|_| {
-            TunError::InvalidArgument(format!("invalid IPv4 netmask '{netmask}'"))
-        })?;
+        let ipv4 =
+            parse_ipv4_clean(ipv4_addr).map_err(|e| TunError::InvalidArgument(e.to_string()))?;
+        let mask: Ipv4Addr = netmask
+            .trim()
+            .parse()
+            .map_err(|_| TunError::InvalidArgument(format!("invalid IPv4 netmask '{netmask}'")))?;
 
         if self.is_mock {
             return Ok(());
@@ -319,7 +320,8 @@ pub fn register_owned_async_fd(fd: OwnedFd) -> io::Result<AsyncFd<OwnedFd>> {
 }
 
 fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<()> {
-    let raw_flags = fcntl(fd, FcntlArg::F_GETFL).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+    let raw_flags =
+        fcntl(fd, FcntlArg::F_GETFL).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
     let mut oflags = OFlag::from_bits_retain(raw_flags);
     oflags.insert(OFlag::O_NONBLOCK | OFlag::O_CLOEXEC);
     fcntl(fd, FcntlArg::F_SETFL(oflags)).map_err(|e| io::Error::from_raw_os_error(e as i32))?;

@@ -234,18 +234,18 @@ fn read_nofollow(path: &Path) -> Result<String, DnsError> {
 
 fn write_atomic_nofollow(path: &Path, content: &str) -> Result<(), DnsError> {
     reject_if_symlink(path)?;
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("missing parent directory for '{}'", path.display()),
-        )
-    })?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("missing parent directory for '{}'", path.display()),
+            )
+        })?;
     fs::create_dir_all(parent)?;
 
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("dns");
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("dns");
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp_path = parent.join(format!(".{file_name}.{}.{seq}.tmp", std::process::id()));
 
@@ -315,8 +315,11 @@ mod tests {
         ));
 
         // Happy path apply -> verify -> reset
-        apply_dns_configuration(&paths, &["1.1.1.1".to_owned(), "2606:4700:4700::1111".to_owned()])
-            .expect("apply dns");
+        apply_dns_configuration(
+            &paths,
+            &["1.1.1.1".to_owned(), "2606:4700:4700::1111".to_owned()],
+        )
+        .expect("apply dns");
         assert!(is_custom_dns_active(&paths));
         assert_eq!(
             read_current_dns_servers(&paths),

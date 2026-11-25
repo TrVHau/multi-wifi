@@ -76,7 +76,7 @@ MultiWiFi was benchmarked on bare-metal hardware with dual active physical Wi-Fi
 | **Bonding Parser (C)** | N/A | **1,465 MB/s (~11.72 Gbps)** | Verified in `tests/test_bonding.c` (`-O2`) |
 | **D-Bus IPC Roundtrip (C)** | N/A | **437 µs** | Verified in `tests/test_dbus_daemon.c` |
 | **Rust Daemon Footprint** | N/A | **9.30–9.86 MB RSS**, **8.23 MB** bin (`6.20 MB` stripped) | Zero GLib/libnm runtime dependency (`multiwifi-daemon`) |
-| **Test Coverage** | N/A | **47 Rust tests + 9 CTest suites (100% pass)** | Zero Clippy warnings (`-D warnings`) & 0 ASan leaks on C suite |
+| **Test Coverage** | N/A | **48 Rust tests + 10 CTest suites (100% pass)** | Includes live C `GDBus` $\leftrightarrow$ Rust daemon parity & ASan checks |
 
 ---
 
@@ -208,6 +208,7 @@ git clone https://github.com/TrVHau/multi-wifi.git
 cd multi-wifi
 
 # 2. Lint and test Rust workspace crates (multiwifi-core + multiwifi-daemon)
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
@@ -350,14 +351,14 @@ profile_id = "primary-vpn"
 
 MultiWiFi enforces two automated verification layers covering happy paths, symlink hardening, D-Bus authorization, and isolated network-namespace netlink/nftables transactions:
 
-### 1. Rust Workspace (`cargo test --workspace` — 47 tests)
+### 1. Rust Workspace (`cargo test --workspace` — 48 tests)
 
 | Crate | Tests | Focus Area |
 | :--- | :--- | :--- |
 | `multiwifi-core` | 38 passed | TOML parser & secret rejection, capability probing, WRR scheduler + concurrency stress, `nftables` dual-table builders & netns lifecycle, INI journals, Netlink rule/route transactions, `path_monitor`, `tun_device`, `loop_prevention`, `bonding_protocol` & `bonding_client` |
-| `multiwifi-daemon` | 9 passed | `/proc/net/route` & NM state mapping, atomic DNS symlink hardening, operation history pruning, `zbus` D-Bus IPC roundtrip, signal emission & session Polkit denial |
+| `multiwifi-daemon` | 10 passed | `/proc/net/route` & NM state mapping, atomic DNS symlink hardening, operation history pruning, runtime `multiwifi.conf` loading & secret rejection, `zbus` D-Bus IPC roundtrip, signal emission & session Polkit denial |
 
-### 2. CMake / CTest Suites (`ctest --test-dir build` — 9 suites)
+### 2. CMake / CTest Suites (`ctest --test-dir build` — 10 suites)
 
 | Test Suite | Focus Area | Verification Strategy |
 | :--- | :--- | :--- |
@@ -370,10 +371,11 @@ MultiWiFi enforces two automated verification layers covering happy paths, symli
 | `test_load_balancer` | WRR & `nftables` | Concurrency safety, GCD normalization, dual-table teardown |
 | `test_bonding` | MPTCP & TUN aggregation | Frame parsing (`0x4d574631`), garbage recovery, anti-spoofing |
 | `test_packaging` | Distribution safety | FHS permissions, systemd safety, AppDir isolation |
+| `test_rust_parity` | C `GDBus` $\leftrightarrow$ Rust Daemon | Live isolated `dbus-daemon` XML introspection match, IPC contract, signals, DNS `O_NOFOLLOW`, Polkit enforcement & clean exit |
 
 Run all checks:
 ```bash
-cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && ctest --test-dir build --output-on-failure
+cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && ctest --test-dir build --output-on-failure
 ```
 
 ---

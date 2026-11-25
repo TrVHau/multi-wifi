@@ -76,7 +76,11 @@ impl SchedulerInner {
                 };
             }
         }
-        if g == 0 { 1 } else { g }
+        if g == 0 {
+            1
+        } else {
+            g
+        }
     }
 }
 

@@ -37,3 +37,14 @@ target_compile_definitions(test_packaging PRIVATE
 )
 target_link_libraries(test_packaging PRIVATE multiwifi-core)
 add_test(NAME test_packaging COMMAND test_packaging)
+
+if(MULTIWIFI_RUST_DAEMON)
+    add_executable(test_rust_parity test_rust_parity.c)
+    add_dependencies(test_rust_parity multiwifi-daemon-rust)
+    target_compile_definitions(test_rust_parity PRIVATE
+        MULTIWIFI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        MULTIWIFI_DAEMON_BIN="${CMAKE_BINARY_DIR}/multiwifi-daemon"
+    )
+    target_link_libraries(test_rust_parity PRIVATE multiwifi-core)
+    add_test(NAME test_rust_parity COMMAND test_rust_parity)
+endif()

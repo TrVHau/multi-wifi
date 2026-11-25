@@ -157,11 +157,8 @@ impl OpManager {
     }
 }
 
-pub(crate) fn insert_val<'a, T>(
-    map: &mut HashMap<String, OwnedVariant>,
-    key: &str,
-    val: T,
-) where
+pub(crate) fn insert_val<'a, T>(map: &mut HashMap<String, OwnedVariant>, key: &str, val: T)
+where
     T: Into<Variant<'a>>,
 {
     if let Ok(owned) = val.into().try_to_owned() {

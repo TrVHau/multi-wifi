@@ -10,14 +10,14 @@ use crate::operation::{insert_val, OpManager, OpState};
 use crate::polkit::{BusKind, PolkitAuthorizer};
 use multiwifi_core::bonding_client::{BondingClient, BondingProfile, BondingState, BondingUplink};
 use multiwifi_core::capabilities::Capabilities;
-use multiwifi_core::config::LoadBalanceStrategy;
+use multiwifi_core::config::{LoadBalanceStrategy, MultiWifiConfig};
 use multiwifi_core::firewall::FirewallManager;
 use multiwifi_core::load_balancer::{Scheduler, UplinkState};
 use multiwifi_core::path_monitor::{PathInfo, PathMonitor};
 use multiwifi_core::routing_manager::{RoutePlan, RoutingManager};
 use nix::unistd::geteuid;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tokio::sync::{watch, Mutex as AsyncMutex};
@@ -34,6 +34,7 @@ pub const DBUS_PATH: &str = "/io/github/multiwifi/Daemon";
 
 const DIAGNOSTICS_COOLDOWN: Duration = Duration::from_millis(1500);
 const DEFAULT_JOURNAL_DIR: &str = "/run/multiwifi/journals";
+const DEFAULT_CONFIG_PATH: &str = "/etc/multiwifi/multiwifi.conf";
 
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
@@ -42,6 +43,7 @@ pub struct ServiceConfig {
     pub bus_name: String,
     pub dns_paths: Option<DnsPaths>,
     pub journal_dir: Option<PathBuf>,
+    pub config_path: Option<PathBuf>,
 }
 
 impl ServiceConfig {
@@ -52,12 +54,17 @@ impl ServiceConfig {
         } else {
             None
         };
+        let config_path = std::env::var_os("MULTIWIFI_CONFIG_PATH")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| Some(PathBuf::from(DEFAULT_CONFIG_PATH)));
         Self {
             bus_kind,
             enable_polkit,
             bus_name: DBUS_NAME.to_owned(),
             dns_paths: None,
             journal_dir,
+            config_path,
         }
     }
 }
@@ -74,6 +81,7 @@ pub struct DaemonCore {
     bonding_client: BondingClient,
     last_applied_marks: Mutex<Vec<u32>>,
     custom_weights: Mutex<HashMap<String, u32>>,
+    disabled_uplinks: Mutex<HashSet<String>>,
     last_diagnostics_at: Mutex<Option<Instant>>,
     custom_dns_applied: Mutex<bool>,
     shutdown_tx: watch::Sender<bool>,
@@ -101,6 +109,7 @@ impl DaemonCore {
             bonding_client: BondingClient::new(),
             last_applied_marks: Mutex::new(Vec::new()),
             custom_weights: Mutex::new(HashMap::new()),
+            disabled_uplinks: Mutex::new(HashSet::new()),
             last_diagnostics_at: Mutex::new(None),
             custom_dns_applied: Mutex::new(false),
             shutdown_tx,
@@ -108,9 +117,54 @@ impl DaemonCore {
     }
 
     pub async fn recover_startup_state(&self) {
+        if let Some(ref cfg_path) = self.config.config_path {
+            self.apply_runtime_config_file(cfg_path);
+        }
         let _ = self.routing_mgr.recover().await;
         if let Ok(true) = self.firewall.verify() {
             let _ = self.firewall.teardown();
+        }
+    }
+
+    fn apply_runtime_config_file(&self, path: &Path) {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+            Err(err) => {
+                eprintln!(
+                    "Unable to inspect MultiWiFi config '{}': {err}",
+                    path.display()
+                );
+                return;
+            }
+        }
+
+        match MultiWifiConfig::parse_file(path) {
+            Ok(cfg) => {
+                self.path_monitor.set_config(&cfg.load_balance);
+                let mut weights = self
+                    .custom_weights
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let mut disabled = self
+                    .disabled_uplinks
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                for up in &cfg.uplinks {
+                    weights.insert(up.device_id.clone(), up.weight);
+                    if up.enabled {
+                        disabled.remove(&up.device_id);
+                    } else {
+                        disabled.insert(up.device_id.clone());
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "Ignoring invalid MultiWiFi config '{}': {err}",
+                    path.display()
+                );
+            }
         }
     }
 
@@ -198,17 +252,31 @@ impl DaemonCore {
 
         if self.routing_mgr.is_active().await {
             let op_id = self.op_manager.create_op("StartLoadBalancing");
-            self.emit_op_finished(emitter, &op_id, true, None, "Load balancing is already active")
-                .await;
+            self.emit_op_finished(
+                emitter,
+                &op_id,
+                true,
+                None,
+                "Load balancing is already active",
+            )
+            .await;
             let _ = DaemonInterface::status_changed(emitter, self.build_status_dict().await).await;
             return Ok(op_id);
         }
 
         let op_id = self.op_manager.create_op("StartLoadBalancing");
         let devices = self.inventory.refresh().await;
+        let disabled_set: HashSet<String> = self
+            .disabled_uplinks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let mut plan = RoutePlan::new();
         let mut idx = 0u32;
         for d in &devices {
+            if disabled_set.contains(&d.ifname) {
+                continue;
+            }
             if d.state == WifiDeviceState::Connected
                 && !d.ipv4_address.is_empty()
                 && !d.ipv4_gateway.is_empty()
@@ -498,14 +566,23 @@ impl DaemonCore {
         )
         .await;
         self.bonding_client.stop().await;
-        self.emit_op_finished(emitter, &op_id, true, None, "Bonding tunnel terminated cleanly")
-            .await;
+        self.emit_op_finished(
+            emitter,
+            &op_id,
+            true,
+            None,
+            "Bonding tunnel terminated cleanly",
+        )
+        .await;
         let _ = DaemonInterface::status_changed(emitter, self.build_status_dict().await).await;
         op_id
     }
 
     async fn on_paths_updated(&self, conn: &Connection, paths: Vec<PathInfo>) {
-        if let Ok(iface_ref) = conn.object_server().interface::<_, DaemonInterface>(DBUS_PATH).await
+        if let Ok(iface_ref) = conn
+            .object_server()
+            .interface::<_, DaemonInterface>(DBUS_PATH)
+            .await
         {
             let emitter = iface_ref.signal_emitter();
             for p in &paths {
@@ -760,7 +837,13 @@ impl DaemonInterface {
 
         let op_id = self.core.op_manager.create_op("RunDiagnostics");
         self.core
-            .emit_op_progress(&emitter, &op_id, OpState::Applying, 50, "Executing probe cycle")
+            .emit_op_progress(
+                &emitter,
+                &op_id,
+                OpState::Applying,
+                50,
+                "Executing probe cycle",
+            )
             .await;
 
         let monitor = self.core.path_monitor.clone();
@@ -769,13 +852,7 @@ impl DaemonInterface {
         });
 
         self.core
-            .emit_op_finished(
-                &emitter,
-                &op_id,
-                true,
-                None,
-                "Diagnostics cycle completed",
-            )
+            .emit_op_finished(&emitter, &op_id, true, None, "Diagnostics cycle completed")
             .await;
         Ok(op_id)
     }
@@ -788,7 +865,9 @@ impl DaemonInterface {
         self.core
             .op_manager
             .to_dbus_dict(operation_id)
-            .ok_or_else(|| DaemonError::InvalidArgument("Unknown or expired operation ID".to_owned()))
+            .ok_or_else(|| {
+                DaemonError::InvalidArgument("Unknown or expired operation ID".to_owned())
+            })
     }
 
     #[zbus(name = "StopDaemon")]
@@ -899,11 +978,7 @@ impl DaemonInterface {
     ) -> zbus::Result<()>;
 
     #[zbus(signal, name = "Warning")]
-    async fn warning(
-        emitter: &SignalEmitter<'_>,
-        code: &str,
-        message: &str,
-    ) -> zbus::Result<()>;
+    async fn warning(emitter: &SignalEmitter<'_>, code: &str, message: &str) -> zbus::Result<()>;
 }
 
 /// Running handle for the D-Bus daemon service and its background monitor tasks.
@@ -948,6 +1023,7 @@ impl DaemonServer {
                             break;
                         }
                         let devs = dev_rx.borrow().clone();
+                        crate::nm_client::sync_devices_to_monitor(&core_bg.path_monitor, &devs);
                         if let Ok(iface_ref) = conn_bg.object_server().interface::<_, DaemonInterface>(DBUS_PATH).await {
                             let emitter = iface_ref.signal_emitter();
                             for d in &devs {
@@ -990,11 +1066,7 @@ impl DaemonServer {
 fn path_to_dbus_dict(p: &PathInfo) -> HashMap<String, OwnedVariant> {
     let mut map = HashMap::new();
     insert_val(&mut map, "ifname", p.ifname.clone());
-    insert_val(
-        &mut map,
-        "gateway",
-        p.gateway.clone().unwrap_or_default(),
-    );
+    insert_val(&mut map, "gateway", p.gateway.clone().unwrap_or_default());
     insert_val(
         &mut map,
         "source_ip",
@@ -1045,6 +1117,7 @@ mod tests {
             bus_name: DBUS_NAME.to_owned(),
             dns_paths,
             journal_dir: Some(std::env::temp_dir().join("multiwifi_rust_test_journals")),
+            config_path: None,
         }
     }
 
@@ -1054,7 +1127,13 @@ mod tests {
         R: for<'a> serde::Deserialize<'a> + zbus::zvariant::Type,
     {
         let reply = conn
-            .call_method(Some(DBUS_NAME), DBUS_PATH, Some(DBUS_NAME_IFACE), method, body)
+            .call_method(
+                Some(DBUS_NAME),
+                DBUS_PATH,
+                Some(DBUS_NAME_IFACE),
+                method,
+                body,
+            )
             .await?;
         reply.body().deserialize()
     }
@@ -1110,7 +1189,9 @@ mod tests {
         let err_empty = call_daemon::<_, ()>(&client, "SetPathWeight", &("", 10u32))
             .await
             .unwrap_err();
-        assert!(err_empty.to_string().contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
+        assert!(err_empty
+            .to_string()
+            .contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
         call_daemon::<_, ()>(&client, "SetPathWeight", &("wlan0", 5u32))
             .await
             .expect("valid SetPathWeight");
@@ -1129,9 +1210,10 @@ mod tests {
         let op_id: String = call_daemon(&client, "RunDiagnostics", &())
             .await
             .expect("RunDiagnostics");
-        let diag: HashMap<String, OwnedVariant> = call_daemon(&client, "GetDiagnostics", &(op_id.as_str(),))
-            .await
-            .expect("GetDiagnostics");
+        let diag: HashMap<String, OwnedVariant> =
+            call_daemon(&client, "GetDiagnostics", &(op_id.as_str(),))
+                .await
+                .expect("GetDiagnostics");
         assert_eq!(
             diag.get("state").and_then(|v| <&str>::try_from(v).ok()),
             Some("SUCCEEDED")
@@ -1149,23 +1231,26 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(bad_diag.to_string().contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
+        assert!(bad_diag
+            .to_string()
+            .contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
 
         verify_dns_dbus_roundtrip(&client).await;
         server.stop().await;
     }
 
     async fn verify_dns_dbus_roundtrip(client: &Connection) {
-        let (dns_init, custom_init): (Vec<String>, bool) = call_daemon(client, "GetDNS", &())
-            .await
-            .expect("GetDNS");
+        let (dns_init, custom_init): (Vec<String>, bool) =
+            call_daemon(client, "GetDNS", &()).await.expect("GetDNS");
         assert!(!custom_init);
         assert_eq!(dns_init, vec!["192.168.1.1"]);
 
         let bad_dns = call_daemon::<_, String>(client, "SetDNS", &(vec!["bad.ip"],))
             .await
             .unwrap_err();
-        assert!(bad_dns.to_string().contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
+        assert!(bad_dns
+            .to_string()
+            .contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
 
         let res: String = call_daemon(client, "SetDNS", &(vec!["1.1.1.1", "1.0.0.1"],))
             .await
@@ -1201,7 +1286,9 @@ mod tests {
             .interface(DBUS_NAME_IFACE)
             .path(DBUS_PATH)
             .build();
-        let dbus_proxy = zbus::fdo::DBusProxy::new(&client).await.expect("dbus proxy");
+        let dbus_proxy = zbus::fdo::DBusProxy::new(&client)
+            .await
+            .expect("dbus proxy");
         dbus_proxy
             .add_match_rule(rule_prog.expect("rule"))
             .await
@@ -1233,7 +1320,8 @@ mod tests {
                     }
                     Some("OperationFinished") => {
                         if let Ok((id, ok, _res)) =
-                            msg.body().deserialize::<(String, bool, HashMap<String, OwnedVariant>)>()
+                            msg.body()
+                                .deserialize::<(String, bool, HashMap<String, OwnedVariant>)>()
                         {
                             if id == op_id {
                                 assert!(ok);
@@ -1276,17 +1364,23 @@ mod tests {
         let err_stop = call_daemon::<_, ()>(&client, "StopDaemon", &())
             .await
             .unwrap_err();
-        assert!(err_stop.to_string().contains(MULTIWIFI_ERROR_NOT_AUTHORIZED));
+        assert!(err_stop
+            .to_string()
+            .contains(MULTIWIFI_ERROR_NOT_AUTHORIZED));
 
         let err_setdns = call_daemon::<_, String>(&client, "SetDNS", &(vec!["1.1.1.1"],))
             .await
             .unwrap_err();
-        assert!(err_setdns.to_string().contains(MULTIWIFI_ERROR_NOT_AUTHORIZED));
+        assert!(err_setdns
+            .to_string()
+            .contains(MULTIWIFI_ERROR_NOT_AUTHORIZED));
 
         let err_resetdns = call_daemon::<_, String>(&client, "ResetDNS", &())
             .await
             .unwrap_err();
-        assert!(err_resetdns.to_string().contains(MULTIWIFI_ERROR_NOT_AUTHORIZED));
+        assert!(err_resetdns
+            .to_string()
+            .contains(MULTIWIFI_ERROR_NOT_AUTHORIZED));
 
         server.stop().await;
     }
@@ -1316,7 +1410,9 @@ mod tests {
         let sym_err = call_daemon::<_, String>(&client, "SetDNS", &(vec!["1.1.1.1"],))
             .await
             .unwrap_err();
-        assert!(sym_err.to_string().contains("io.github.multiwifi.Error.NetworkFailure"));
+        assert!(sym_err
+            .to_string()
+            .contains("io.github.multiwifi.Error.NetworkFailure"));
         assert!(!victim.exists());
 
         fs::remove_file(&nm_conf).expect("remove symlink");
@@ -1324,7 +1420,9 @@ mod tests {
         let many_err = call_daemon::<_, String>(&client, "SetDNS", &(many,))
             .await
             .unwrap_err();
-        assert!(many_err.to_string().contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
+        assert!(many_err
+            .to_string()
+            .contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
 
         let mut bad_prof = HashMap::new();
         bad_prof.insert(
@@ -1334,8 +1432,76 @@ mod tests {
         let bond_err = call_daemon::<_, String>(&client, "StartBonding", &(bad_prof,))
             .await
             .unwrap_err();
-        assert!(bond_err.to_string().contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
+        assert!(bond_err
+            .to_string()
+            .contains(MULTIWIFI_ERROR_INVALID_ARGUMENT));
 
         server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn runtime_config_applies_weights_and_rejects_secrets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg_path = dir.path().join("multiwifi.conf");
+        fs::write(
+            &cfg_path,
+            "\
+schema_version = 1
+mode = \"load_balance\"
+
+[load_balance]
+strategy = \"weighted_round_robin\"
+health_check_interval_ms = 1500
+failure_threshold = 4
+recovery_threshold = 2
+cooldown_ms = 3000
+
+[[uplinks]]
+device_id = \"wlan0\"
+enabled = true
+weight = 250
+
+[[uplinks]]
+device_id = \"wlan1\"
+enabled = false
+weight = 50
+",
+        )
+        .expect("write config");
+
+        let mut cfg = test_config(false, None);
+        cfg.config_path = Some(cfg_path.clone());
+        let core = DaemonCore::new(cfg);
+        core.recover_startup_state().await;
+
+        assert_eq!(
+            core.custom_weights
+                .lock()
+                .expect("weights lock")
+                .get("wlan0")
+                .copied(),
+            Some(250)
+        );
+        assert!(core
+            .disabled_uplinks
+            .lock()
+            .expect("disabled lock")
+            .contains("wlan1"));
+
+        let bad_cfg_path = dir.path().join("secret.conf");
+        fs::write(
+            &bad_cfg_path,
+            "schema_version = 1\n[bonding]\nenabled = false\ntoken = \"forbidden\"\n",
+        )
+        .expect("write bad config");
+        let mut bad_cfg = test_config(false, None);
+        bad_cfg.config_path = Some(bad_cfg_path);
+        let safe_core = DaemonCore::new(bad_cfg);
+        safe_core.recover_startup_state().await;
+        assert!(safe_core
+            .custom_weights
+            .lock()
+            .expect("weights lock")
+            .is_empty());
     }
 }

@@ -116,11 +116,7 @@ impl WifiDeviceInfo {
 }
 
 /// Queries kernel `getifaddrs` and `/proc/net/route` as an authoritative fallback for IPv4/gateway.
-pub fn fill_kernel_ipv4(
-    ifname: &str,
-    ipv4_address: &mut String,
-    ipv4_gateway: &mut String,
-) {
+pub fn fill_kernel_ipv4(ifname: &str, ipv4_address: &mut String, ipv4_gateway: &mut String) {
     if ifname.is_empty() {
         return;
     }
@@ -364,7 +360,10 @@ async fn inspect_nm_device(
     let nm_state: u32 = dev.get_property("State").await.unwrap_or(0);
     let state = WifiDeviceState::from_nm(nm_state);
     let state_str = state.as_str().to_owned();
-    let ifindex = iface_index(&ifname).ok().and_then(|idx| i32::try_from(idx).ok()).unwrap_or(-1);
+    let ifindex = iface_index(&ifname)
+        .ok()
+        .and_then(|idx| i32::try_from(idx).ok())
+        .unwrap_or(-1);
 
     let mut hw_address: String = dev.get_property("HwAddress").await.unwrap_or_default();
     let wireless = Proxy::new(conn, NM_SERVICE, dev_path.as_ref(), NM_WIRELESS_IFACE).await?;
@@ -375,8 +374,7 @@ async fn inspect_nm_device(
             .unwrap_or_default();
     }
 
-    let (ssid, bssid, signal_strength, frequency) =
-        read_active_ap(conn, &wireless).await;
+    let (ssid, bssid, signal_strength, frequency) = read_active_ap(conn, &wireless).await;
     let (mut ipv4_address, mut ipv4_gateway) = read_ip4_config(conn, &dev).await;
     let ipv6_address = read_ip6_config(conn, &dev).await;
     let (connection_uuid, connection_id) = read_active_connection(conn, &dev).await;
@@ -405,7 +403,10 @@ async fn inspect_nm_device(
 }
 
 async fn read_active_ap(conn: &Connection, wireless: &Proxy<'_>) -> (String, String, u8, u32) {
-    let Ok(ap_path) = wireless.get_property::<OwnedObjectPath>("ActiveAccessPoint").await else {
+    let Ok(ap_path) = wireless
+        .get_property::<OwnedObjectPath>("ActiveAccessPoint")
+        .await
+    else {
         return (String::new(), String::new(), 0, 0);
     };
     if ap_path.as_str() == "/" {
@@ -475,7 +476,10 @@ async fn read_first_address_data(ip_cfg: &Proxy<'_>) -> String {
 }
 
 async fn read_active_connection(conn: &Connection, dev: &Proxy<'_>) -> (String, String) {
-    let Ok(ac_path) = dev.get_property::<OwnedObjectPath>("ActiveConnection").await else {
+    let Ok(ac_path) = dev
+        .get_property::<OwnedObjectPath>("ActiveConnection")
+        .await
+    else {
         return (String::new(), String::new());
     };
     if ac_path.as_str() == "/" {

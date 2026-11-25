@@ -129,7 +129,11 @@ impl NetlinkSession {
         Ok(())
     }
 
-    pub async fn verify_rule(&self, table_id: Option<u32>, pref: u32) -> Result<bool, NetlinkError> {
+    pub async fn verify_rule(
+        &self,
+        table_id: Option<u32>,
+        pref: u32,
+    ) -> Result<bool, NetlinkError> {
         let mut rules = self.handle.rule().get(IpVersion::V4).execute();
         while let Some(rule) = rules.try_next().await? {
             let mut r_table = u32::from(rule.header.table);
@@ -306,7 +310,9 @@ impl NetlinkSession {
                 match attr {
                     netlink_packet_route::route::RouteAttribute::Table(t) => r_table = *t,
                     netlink_packet_route::route::RouteAttribute::Oif(o) => r_oif = Some(*o),
-                    netlink_packet_route::route::RouteAttribute::Gateway(RouteAddress::Inet(ip)) => {
+                    netlink_packet_route::route::RouteAttribute::Gateway(RouteAddress::Inet(
+                        ip,
+                    )) => {
                         r_gw = Some(*ip);
                     }
                     _ => {}
@@ -348,9 +354,9 @@ pub fn iface_index(ifname: &str) -> Result<u32, NetlinkError> {
 
 pub fn parse_ipv4_clean(raw: &str) -> Result<Ipv4Addr, NetlinkError> {
     let clean = raw.split('/').next().unwrap_or(raw).trim();
-    clean.parse::<Ipv4Addr>().map_err(|_| {
-        NetlinkError::InvalidArgument(format!("invalid IPv4 address '{raw}'"))
-    })
+    clean
+        .parse::<Ipv4Addr>()
+        .map_err(|_| NetlinkError::InvalidArgument(format!("invalid IPv4 address '{raw}'")))
 }
 
 #[cfg(all(test, target_os = "linux"))]

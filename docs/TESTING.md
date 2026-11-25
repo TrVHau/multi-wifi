@@ -6,7 +6,7 @@ This document outlines the automated testing strategy covering both the Rust wor
 
 ## 1. Rust Workspace Test Suites (`cargo test --workspace`)
 
-All core networking primitives and the `zbus` system daemon are verified via Rust unit and integration tests compiled strictly with `cargo clippy --workspace --all-targets -- -D warnings`:
+All core networking primitives and the `zbus` system daemon are verified via Rust unit and integration tests compiled strictly with `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`:
 
 - **`multiwifi-core` (38 tests):**
   - `config` (7 tests): TOML validation, strict schema version check, secret rejection, duplicate uplink check, symlink refusal, valid roundtrip.
@@ -21,17 +21,17 @@ All core networking primitives and the `zbus` system daemon are verified via Rus
   - `path_monitor` (4 tests): state string roundtrip, hysteresis (`3` successes / `3` failures), device disconnect/removal/manual updates, non-blocking `TcpSocket` port probing & `ECONNREFUSED` detection.
   - `tun_device` (1 test): non-blocking mock TUN `socketpair` open, IP validation, packet read/write, close lifecycle.
   - `bonding_client` (4 tests): secret token debug redaction, IPv4 anti-spoofing validator, auth rejection/invalid config rollback, end-to-end mock TCP server auth + TUN echo + spoofed packet drop + graceful disconnect.
-- **`multiwifi-daemon` (9 tests):**
+- **`multiwifi-daemon` (10 tests):**
   - `operation` (1 test): bounded 50-entry UUID queue lifecycle and pruning.
   - `dns` (2 tests): validation (`1–16` IPv4/IPv6), atomic apply/backup/restore roundtrip, symlink traversal refusal.
   - `nm_client` (2 tests): NetworkManager state mapping and `/proc/net/route` gateway parsing.
-  - `service` (4 tests): live Session D-Bus roundtrip (`GetVersion`, `GetCapabilities`, `GetDevices`, `GetPaths`, `GetStatus`, `SetPathWeight`, `StopLoadBalancing`, `StopBonding`, `RunDiagnostics` rate-limit, `GetDiagnostics`, `GetDNS`/`SetDNS`/`ResetDNS`), `OperationProgress`/`OperationFinished` signals, Polkit rejection on Session Bus, and DNS/Bonding hardening checks.
+  - `service` (5 tests): live Session D-Bus roundtrip (`GetVersion`, `GetCapabilities`, `GetDevices`, `GetPaths`, `GetStatus`, `SetPathWeight`, `StopLoadBalancing`, `StopBonding`, `RunDiagnostics` rate-limit, `GetDiagnostics`, `GetDNS`/`SetDNS`/`ResetDNS`), `OperationProgress`/`OperationFinished` signals, Polkit rejection on Session Bus, DNS/Bonding hardening checks, and runtime `multiwifi.conf` weight/disabled-uplink loading & secret rejection.
 
 ---
 
 ## 2. CMake / CTest Regression & Packaging Suites (`ctest`)
 
-MultiWiFi also retains 9 CTest regression & packaging verification suites built cleanly with `-Wall -Wextra -Wpedantic`:
+MultiWiFi enforces 10 CTest regression, integration parity, and packaging verification suites built cleanly with `-Wall -Wextra -Wpedantic`:
 
 | Test Target | Focus & Verification Area |
 | :--- | :--- |
@@ -44,6 +44,7 @@ MultiWiFi also retains 9 CTest regression & packaging verification suites built 
 | **`test_load_balancer`** | WRR scheduling, GCD normalization, concurrency, and netfilter dual-table teardown. |
 | **`test_bonding`** | Framing (`0x4d574631`), mock TUN, loop prevention, and mock server handshake. |
 | **`test_packaging`** | D-Bus policy XML, Polkit rules, systemd unit sandboxing, desktop isolation, Arch/Debian/RPM manifests, and portable GUI AppDir isolation. |
+| **`test_rust_parity`** | Live C `GDBusConnection` $\leftrightarrow$ compiled Rust `multiwifi-daemon` parity on an isolated `dbus-daemon`: XML introspection contract matching `data/io.github.multiwifi.Daemon1.xml`, status/capabilities/paths schemas, signals, rate limits, DNS `O_NOFOLLOW`, `Polkit` enforcement, `SIGTERM`/`StopDaemon` clean exit, and C/Rust config & journal format parity (`MULTIWIFI_RUST_DAEMON=ON`). |
 
 ---
 
@@ -51,15 +52,21 @@ MultiWiFi also retains 9 CTest regression & packaging verification suites built 
 
 ### Rust Lint & Test Suite
 ```bash
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace -- --nocapture
 ```
 
-### CMake Build & CTest Suite
+### CMake Build & CTest Suite (GCC or Clang)
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure --verbose
+
+# Optional Clang C11 toolchain check (C GUI + core regression suites)
+CC=clang cmake -B build-clang -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DMULTIWIFI_RUST_DAEMON=OFF
+cmake --build build-clang -j"$(nproc)"
+ctest --test-dir build-clang --output-on-failure --verbose
 ```
 
 ### Memory Safety & Sanitizer Verification (ASan / LSan / UBSan on C Modules)

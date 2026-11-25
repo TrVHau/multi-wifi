@@ -143,7 +143,9 @@ pub fn decode_auth_req(frame: &Frame) -> Result<AuthRequest, ProtocolError> {
         });
     }
     if frame.payload.len() < 8 {
-        return Err(ProtocolError::MalformedPayload("AUTH_REQ payload too short"));
+        return Err(ProtocolError::MalformedPayload(
+            "AUTH_REQ payload too short",
+        ));
     }
 
     let mut slice = frame.payload.as_slice();
@@ -151,14 +153,18 @@ pub fn decode_auth_req(frame: &Frame) -> Result<AuthRequest, ProtocolError> {
 
     let pid_len = usize::from(slice.get_u16());
     if slice.len() < pid_len + 2 {
-        return Err(ProtocolError::MalformedPayload("malformed profile_id in AUTH_REQ"));
+        return Err(ProtocolError::MalformedPayload(
+            "malformed profile_id in AUTH_REQ",
+        ));
     }
     let profile_id = String::from_utf8_lossy(&slice[..pid_len]).into_owned();
     slice.advance(pid_len);
 
     let tok_len = usize::from(slice.get_u16());
     if slice.len() < tok_len {
-        return Err(ProtocolError::MalformedPayload("malformed token in AUTH_REQ"));
+        return Err(ProtocolError::MalformedPayload(
+            "malformed token in AUTH_REQ",
+        ));
     }
     let token = String::from_utf8_lossy(&slice[..tok_len]).into_owned();
 
@@ -181,9 +187,7 @@ pub fn encode_auth_resp(
     let vip = assigned_vip
         .parse::<Ipv4Addr>()
         .unwrap_or(Ipv4Addr::UNSPECIFIED);
-    let mask = netmask
-        .parse::<Ipv4Addr>()
-        .unwrap_or(Ipv4Addr::UNSPECIFIED);
+    let mask = netmask.parse::<Ipv4Addr>().unwrap_or(Ipv4Addr::UNSPECIFIED);
     let msg = clamp_u16_str(message);
 
     let mut payload = BytesMut::with_capacity(18 + msg.len());
@@ -257,7 +261,12 @@ pub fn encode_pong(sequence: u32, client_ts_us: u64, server_ts_us: u64) -> Vec<u
 
 #[must_use]
 pub fn encode_disconnect(sequence: u32, reason_code: u32) -> Vec<u8> {
-    encode_frame(FrameType::Disconnect, 0, sequence, &reason_code.to_be_bytes())
+    encode_frame(
+        FrameType::Disconnect,
+        0,
+        sequence,
+        &reason_code.to_be_bytes(),
+    )
 }
 
 /// Streaming frame parser with automatic garbage & bad-version resynchronization.
@@ -282,12 +291,7 @@ impl FrameParser {
         if data.is_empty() {
             return Ok(Vec::new());
         }
-        if self
-            .buffer
-            .len()
-            .saturating_add(data.len())
-            > MAX_PARSER_BUFFER_BYTES
-        {
+        if self.buffer.len().saturating_add(data.len()) > MAX_PARSER_BUFFER_BYTES {
             return Err(ProtocolError::BufferLimitExceeded);
         }
 

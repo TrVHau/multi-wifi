@@ -51,7 +51,7 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 | **D-Bus IPC Mean Latency** | N/A | **437 µs** (`GDBus` C suite) | Instantaneous GUI responsiveness |
 | **DNS Switching Latency** | N/A | **1.8 ms** (Atomic symlink-safe switch) | Zero DNS downtime |
 | **Probe Fallback Responsiveness**| N/A | **250 ms / port (DNS 53 -> HTTP 80 -> HTTPS 443)** | Resilient on strict APs |
-| **Memory Safety & Linting** | N/A | **0 Rust `unsafe` in daemon + 0 ASan/LSan leaks across 9 C suites** | Clean `clippy -D warnings`, `47` Rust tests + `9` C suites |
+| **Memory Safety & Linting** | N/A | **0 Rust `unsafe` in daemon + 0 ASan/LSan leaks across C suites** | Clean `rustfmt` & `clippy -D warnings`, `48` Rust tests + `10` CTest suites (`100%`) |
 | **Memory Footprint (RSS)** | N/A | **9.3–9.9 MB (Rust Daemon) + ~28 MB (GTK4 GUI baseline)** | Zero GLib/libnm linkage in Rust daemon |
 
 ---
@@ -197,11 +197,11 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 **Methodology & Measured Data:**
 - **Rust Workspace (`crates/multiwifi-core`, `crates/multiwifi-daemon`):**
   - Enforces `#![deny(unsafe_code)]` in `multiwifi-daemon` and `#![deny(unsafe_op_in_unsafe_fn)]` in `multiwifi-core`.
-  - `cargo clippy --workspace --all-targets -- -D warnings`: **0 warnings**.
-  - `cargo test --workspace`: **47/47 tests passed** (`38` in `multiwifi-core` in **0.21 s**, `9` in `multiwifi-daemon` in **0.16 s**).
-- **C11 GUI & C Core Sanitizers (`-DMULTIWIFI_RUST_DAEMON=OFF` with `-fsanitize=address,undefined -fno-omit-frame-pointer`):**
-  - Leaks / Use-After-Free / Undefined behaviors detected: **0 bytes / 0 errors**.
-  - CTest suite pass rate: **9/9 (100%)** (Release build with Rust daemon + CTest: **1.97 s**).
+  - `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`: **0 issues / 0 warnings**.
+  - `cargo test --workspace`: **48/48 tests passed** (`38` in `multiwifi-core` in **0.21 s**, `10` in `multiwifi-daemon` in **0.09 s**).
+- **C11 GUI, C Core Sanitizers & Live Parity (`ctest`):**
+  - ASan + LSan + UBSan (`-DMULTIWIFI_RUST_DAEMON=OFF`, `9/9` C suites): **0 bytes leaked / 0 UB errors** (`2.28 s`).
+  - Release build (`MULTIWIFI_RUST_DAEMON=ON`, `10/10` CTest suites including `test_rust_parity`): **10/10 (100%)** in **2.11 s**.
 
 ---
 
@@ -222,7 +222,8 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 To reproduce these measurements on any Linux workstation:
 
 ```bash
-# 1. Verify Rust workspace lints and unit/integration tests
+# 1. Verify Rust workspace formatting, lints, and unit/integration tests
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 

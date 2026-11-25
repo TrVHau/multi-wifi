@@ -9,7 +9,10 @@ use tokio::signal::unix::{signal, SignalKind};
 enum CliAction {
     Help,
     Version,
-    Run { bus_kind: BusKind, enable_polkit: bool },
+    Run {
+        bus_kind: BusKind,
+        enable_polkit: bool,
+    },
 }
 
 fn parse_args() -> Result<CliAction, String> {

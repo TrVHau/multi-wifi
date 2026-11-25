@@ -34,7 +34,9 @@ impl TryFrom<i32> for JournalOpType {
             1 => Ok(Self::AddRule),
             2 => Ok(Self::AddRoute),
             3 => Ok(Self::AllocTable),
-            other => Err(JournalError::Format(format!("unknown journal op_type {other}"))),
+            other => Err(JournalError::Format(format!(
+                "unknown journal op_type {other}"
+            ))),
         }
     }
 }
@@ -77,12 +79,7 @@ impl JournalEntry {
     }
 
     #[must_use]
-    pub fn add_route(
-        table_id: u32,
-        gateway: &str,
-        ifname: Option<&str>,
-        metric: u32,
-    ) -> Self {
+    pub fn add_route(table_id: u32, gateway: &str, ifname: Option<&str>, metric: u32) -> Self {
         Self::with_type(
             JournalOpType::AddRoute,
             table_id,
@@ -165,7 +162,9 @@ impl RouteJournal {
     /// Atomically persists the journal to `file_path` in `GKeyFile`-compatible INI format.
     pub fn save_to_file(&self, file_path: &Path) -> Result<(), JournalError> {
         let Some(parent) = file_path.parent() else {
-            return Err(JournalError::InvalidArgument("file path has no parent directory"));
+            return Err(JournalError::InvalidArgument(
+                "file path has no parent directory",
+            ));
         };
         reject_symlink_if_exists(file_path)?;
 
@@ -179,8 +178,13 @@ impl RouteJournal {
         dir_builder.create(parent)?;
 
         let mut out = String::new();
-        writeln!(out, "[journal]\nop_id={}\ncount={}", self.op_id, self.entries.len())
-            .map_err(|e| JournalError::Format(e.to_string()))?;
+        writeln!(
+            out,
+            "[journal]\nop_id={}\ncount={}",
+            self.op_id,
+            self.entries.len()
+        )
+        .map_err(|e| JournalError::Format(e.to_string()))?;
 
         for (idx, e) in self.entries.iter().enumerate() {
             writeln!(
@@ -203,7 +207,8 @@ impl RouteJournal {
         let mut tmp = NamedTempFile::new_in(parent)?;
         tmp.write_all(out.as_bytes())?;
         tmp.as_file().sync_all()?;
-        tmp.persist(file_path).map_err(|e| JournalError::Io(e.error))?;
+        tmp.persist(file_path)
+            .map_err(|e| JournalError::Io(e.error))?;
         Ok(())
     }
 
@@ -213,7 +218,10 @@ impl RouteJournal {
         if meta.file_type().is_symlink() {
             return Err(JournalError::Io(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
-                format!("refusing to load journal symlink at '{}'", file_path.display()),
+                format!(
+                    "refusing to load journal symlink at '{}'",
+                    file_path.display()
+                ),
             )));
         }
 
@@ -229,11 +237,13 @@ impl RouteJournal {
                 continue;
             }
             if line.starts_with('[') && line.ends_with(']') {
-                line[1..line.len() - 1].trim().clone_into(&mut current_group);
+                line[1..line.len() - 1]
+                    .trim()
+                    .clone_into(&mut current_group);
                 if let Some(idx_str) = current_group.strip_prefix("entry_") {
-                    let idx: usize = idx_str
-                        .parse()
-                        .map_err(|_| JournalError::Format(format!("invalid group '{current_group}'")))?;
+                    let idx: usize = idx_str.parse().map_err(|_| {
+                        JournalError::Format(format!("invalid group '{current_group}'"))
+                    })?;
                     raw_entries.push((idx, RawEntry::default()));
                 }
                 continue;
@@ -271,10 +281,12 @@ impl RouteJournal {
 
     pub fn remove_file(file_path: &Path) -> Result<(), JournalError> {
         match fs::symlink_metadata(file_path) {
-            Ok(meta) if meta.file_type().is_symlink() => Err(JournalError::Io(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                format!("refusing to unlink symlink at '{}'", file_path.display()),
-            ))),
+            Ok(meta) if meta.file_type().is_symlink() => {
+                Err(JournalError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("refusing to unlink symlink at '{}'", file_path.display()),
+                )))
+            }
             Ok(_) => {
                 fs::remove_file(file_path)?;
                 Ok(())

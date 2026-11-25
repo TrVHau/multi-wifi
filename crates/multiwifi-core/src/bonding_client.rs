@@ -329,19 +329,15 @@ impl BondingClient {
             DEFAULT_TUN_MTU
         };
 
-        let async_tun = match self.prepare_tun(
-            &auth_resp.assigned_vip,
-            &auth_resp.netmask,
-            mtu,
-            is_mptcp,
-        ) {
-            Ok(fd) => fd,
-            Err(err) => {
-                rollback_loop_prev(&mut loop_prev).await;
-                self.set_state(BondingState::Failed);
-                return Err(err);
-            }
-        };
+        let async_tun =
+            match self.prepare_tun(&auth_resp.assigned_vip, &auth_resp.netmask, mtu, is_mptcp) {
+                Ok(fd) => fd,
+                Err(err) => {
+                    rollback_loop_prev(&mut loop_prev).await;
+                    self.set_state(BondingState::Failed);
+                    return Err(err);
+                }
+            };
 
         let (stop_tx, stop_rx) = watch::channel(false);
         let snapshot_ref = Arc::clone(&self.snapshot);
@@ -752,8 +748,7 @@ mod tests {
             SockFlag::SOCK_CLOEXEC,
         )
         .expect("socketpair");
-        let peer_async =
-            crate::tun_device::register_owned_async_fd(sv1).expect("peer async");
+        let peer_async = crate::tun_device::register_owned_async_fd(sv1).expect("peer async");
 
         let client = BondingClient::new();
         client
