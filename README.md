@@ -72,11 +72,11 @@ MultiWiFi was benchmarked on bare-metal hardware with dual active physical Wi-Fi
 | **Download Throughput** | 21.20 Mbps (Viettel) / 4.92 Mbps (FPT) | **19.88 Mbps** (Concurrent Aggregated) | Simultaneous multi-provider stream distribution |
 | **DNS / Gaming Latency** | 31.94 ms avg (Viettel) | **29.41 ms avg** (FPT Steering) | **-2.53 ms lower latency, 4x less jitter (0.85 ms vs 3.67 ms)** |
 | **Packet Loss & Spike Immunity** | 87.6 ms avg, **20% loss, 244 ms max** (Viettel) | **25.80 ms avg, 0% loss, 0.78 ms jitter** (FPT) | Diverts latency-sensitive flows away from degraded path |
-| **Scheduler Microbenchmark (C)** | N/A | **17.40M flows/s (`57.47 ns/decision`)** | Verified in `tests/test_load_balancer.c` (`-O2`) |
-| **Bonding Parser (C)** | N/A | **1,465 MB/s (~11.72 Gbps)** | Verified in `tests/test_bonding.c` (`-O2`) |
+| **Scheduler Microbenchmark (C)** | N/A | **17.40M flows/s (`57.47 ns/decision`)** | Historical C scheduler microbenchmark (`-O2`) |
+| **Bonding Parser (C)** | N/A | **1,465 MB/s (~11.72 Gbps)** | Historical C parser microbenchmark (`-O2`) |
 | **D-Bus IPC Roundtrip (C baseline)** | N/A | **437 µs** | Historical `GDBus` baseline (Rust daemon verified via `test_rust_parity`) |
 | **Rust Daemon Footprint** | N/A | **9.30–9.86 MB RSS**, **8.23 MB** bin (`6.20 MB` stripped) | Zero GLib/libnm runtime dependency (`multiwifi-daemon`) |
-| **Test Coverage** | N/A | **48 Rust tests + 10 CTest suites (100% pass)** | Includes live C `GDBus` $\leftrightarrow$ Rust daemon parity & ASan checks |
+| **Test Coverage** | N/A | **48 Rust tests + 5 CTest suites (100% pass)** | Includes live C `GDBus` $\leftrightarrow$ Rust daemon parity & ASan checks |
 
 ---
 
@@ -358,19 +358,14 @@ MultiWiFi enforces two automated verification layers covering happy paths, symli
 | `multiwifi-core` | 38 passed | TOML parser & secret rejection, capability probing, WRR scheduler + concurrency stress, `nftables` dual-table builders & netns lifecycle, INI journals, Netlink rule/route transactions, `path_monitor`, `tun_device`, `loop_prevention`, `bonding_protocol` & `bonding_client` |
 | `multiwifi-daemon` | 10 passed | `/proc/net/route` & NM state mapping, atomic DNS symlink hardening, operation history pruning, runtime `multiwifi.conf` loading & secret rejection, `zbus` D-Bus IPC roundtrip, signal emission & session Polkit denial |
 
-### 2. CMake / CTest Suites (`ctest --test-dir build` — 10 suites)
+### 2. CMake / CTest Suites (`ctest --test-dir build` — 5 suites)
 
 | Test Suite | Focus Area | Verification Strategy |
 | :--- | :--- | :--- |
-| `test_config` | Parser & schema safety | TOML parsing, range validation, secret rejection |
 | `test_capabilities` | Kernel capabilities | Safe probing, secret redaction filters |
 | `test_wifi_device` | `libnm` inventory & mapping | Interface state transitions, lifecycle management |
 | `test_path_monitor` | Link quality & RTT | Socket probe fallback (`53 -> 80 -> 443`), jitter, hysteresis |
-| `test_operation` | Operation lifecycle | C operation state transitions and rollback tracking |
-| `test_routing_manager` | Transactional routing | Isolated netns, journal persistence, atomic rollback |
-| `test_load_balancer` | WRR & `nftables` | Concurrency safety, GCD normalization, dual-table teardown |
-| `test_bonding` | MPTCP & TUN aggregation | Frame parsing (`0x4d574631`), garbage recovery, anti-spoofing |
-| `test_packaging` | Distribution safety | FHS permissions, systemd safety, AppDir isolation |
+| `test_packaging` | Distribution safety | FHS permissions, systemd safety, AppDir isolation, residual netfilter check |
 | `test_rust_parity` | C `GDBus` $\leftrightarrow$ Rust Daemon | Live isolated `dbus-daemon` XML introspection match, IPC contract, signals, DNS `O_NOFOLLOW`, Polkit enforcement & clean exit |
 
 Run all checks:

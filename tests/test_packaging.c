@@ -9,8 +9,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include "multiwifi/core/firewall.h"
-#include "multiwifi/core/routing_manager.h"
+#include <nftables/libnftables.h>
 #include "multiwifi/shared/dbus_defs.h"
 #include "multiwifi/version.h"
 
@@ -297,16 +296,16 @@ static void test_clean_uninstall_and_residual_resources(void)
 
     if (pid == 0) {
         if (enter_isolated_network_namespace()) {
-            MultiWifiFirewall *fw = multiwifi_firewall_new();
-            gboolean exists = FALSE;
-            GError *error = NULL;
-
-            /* Verify firewall table is absent if kernel permits netfilter in user namespace */
-            if (multiwifi_firewall_verify(fw, &exists, &error)) {
-                if (exists) _exit(1);
+            struct nft_ctx *nft = nft_ctx_new(NFT_CTX_DEFAULT);
+            if (nft != NULL) {
+                nft_ctx_buffer_error(nft);
+                if (nft_run_cmd_from_buffer(nft, "list table inet multiwifi") == 0 ||
+                    nft_run_cmd_from_buffer(nft, "list table ip multiwifi") == 0) {
+                    nft_ctx_free(nft);
+                    _exit(1);
+                }
+                nft_ctx_free(nft);
             }
-            g_clear_error(&error);
-            g_object_unref(fw);
         }
         _exit(0);
     }

@@ -29,22 +29,17 @@ All core networking primitives and the `zbus` system daemon are verified via Rus
 
 ---
 
-## 2. CMake / CTest Regression & Packaging Suites (`ctest`)
+## 2. CMake / CTest GUI, Packaging & Live Parity Suites (`ctest`)
 
-MultiWiFi enforces 10 CTest regression, integration parity, and packaging verification suites built cleanly with `-Wall -Wextra -Wpedantic`:
+MultiWiFi enforces 5 CTest suites (for the retained C11/GTK4 GUI support layer, packaging/residual verification, and live C-to-Rust D-Bus parity) built cleanly with `-Wall -Wextra -Wpedantic`:
 
 | Test Target | Focus & Verification Area |
 | :--- | :--- |
-| **`test_config`** | C TOML config validation parity (schema bounds, secrets, duplicate uplinks, overflows). |
-| **`test_capabilities`** | Safe kernel probing and logging secret-redaction checks. |
-| **`test_wifi_device`** | `libnm` device inventory structs and state transitions. |
-| **`test_path_monitor`** | Hysteresis state machine, RTT smoothing, and mock socket probes. |
-| **`test_operation`** | C operation lifecycle queue (`operation.c`: state transitions, pruning, rollback failure transitions). |
-| **`test_routing_manager`** | Isolated namespace routing transactions, journal persistence, atomic rollback, crash recovery. |
-| **`test_load_balancer`** | WRR scheduling, GCD normalization, concurrency, and netfilter dual-table teardown. |
-| **`test_bonding`** | Framing (`0x4d574631`), mock TUN, loop prevention, and mock server handshake. |
-| **`test_packaging`** | D-Bus policy XML, Polkit rules, systemd unit sandboxing, desktop isolation, Arch/Debian/RPM manifests, and portable GUI AppDir isolation. |
-| **`test_rust_parity`** | Live C `GDBusConnection` $\leftrightarrow$ compiled Rust `multiwifi-daemon` parity on an isolated `dbus-daemon`: XML introspection contract matching `data/io.github.multiwifi.Daemon1.xml`, status/capabilities/paths schemas, signals, rate limits, DNS `O_NOFOLLOW`, `Polkit` enforcement, `SIGTERM`/`StopDaemon` clean exit, and C/Rust config & journal format parity (`MULTIWIFI_BUILD_DAEMON=ON`). |
+| **`test_capabilities`** | Safe kernel probing and logging secret-redaction checks (`src/core/capabilities.c`, `logging.c`). |
+| **`test_wifi_device`** | `libnm` device inventory structs and state transitions (`src/core/wifi_device.c`, `wifi_inventory.c`). |
+| **`test_path_monitor`** | Hysteresis state machine, RTT smoothing, and mock socket probes (`src/core/path_monitor.c`). |
+| **`test_packaging`** | D-Bus policy XML, Polkit rules, systemd unit sandboxing, desktop isolation, Arch/Debian/RPM manifests, portable GUI AppDir isolation, and isolated netns `libnftables` residual table check. |
+| **`test_rust_parity`** | Live C `GDBusConnection` $\leftrightarrow$ compiled Rust `multiwifi-daemon` parity on an isolated `dbus-daemon`: XML introspection contract matching `data/io.github.multiwifi.Daemon1.xml`, status/capabilities/paths schemas, signals, rate limits, DNS `O_NOFOLLOW`, `Polkit` enforcement, `SIGTERM`/`StopDaemon` clean exit, and invalid-secret config resilience (`MULTIWIFI_BUILD_DAEMON=ON`). |
 
 ---
 

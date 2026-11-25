@@ -1200,11 +1200,11 @@ mod tests {
         let stop_lb_op: String = call_daemon(&client, "StopLoadBalancing", &())
             .await
             .expect("StopLoadBalancing");
-        assert!(!stop_lb_op.is_empty());
+        assert_ne!(stop_lb_op, "");
         let stop_bond_op: String = call_daemon(&client, "StopBonding", &())
             .await
             .expect("StopBonding");
-        assert!(!stop_bond_op.is_empty());
+        assert_ne!(stop_bond_op, "");
 
         // 5. RunDiagnostics + GetDiagnostics + rate limit
         let op_id: String = call_daemon(&client, "RunDiagnostics", &())

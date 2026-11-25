@@ -1,6 +1,6 @@
 # MultiWiFi Configuration Guide
 
-This document describes the configuration file format, TOML schema specifications, runtime directory layouts, and validation rules implemented by `crates/multiwifi-core/src/config.rs` (and mirrored in `src/core/config.c`).
+This document describes the configuration file format, TOML schema specifications, runtime directory layouts, and validation rules implemented by `crates/multiwifi-core/src/config.rs`.
 
 ---
 

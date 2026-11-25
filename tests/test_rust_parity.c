@@ -1,7 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "multiwifi/core/config.h"
-#include "multiwifi/core/journal.h"
 #include "multiwifi/shared/dbus_defs.h"
 #include "multiwifi/version.h"
 
@@ -559,16 +557,29 @@ static void test_mutating_methods_signals_and_dns(void)
     g_assert_true(g_file_set_contents(resolv_path, "nameserver 192.168.1.1\n", -1, &err));
     g_assert_no_error(err);
 
-    /* Generate multiwifi.conf via C serializer and feed it to Rust daemon */
-    MultiWifiConfig *c_cfg = multiwifi_config_new_default();
-    c_cfg->load_balance.health_check_interval_ms = 1500;
-    gchar *cfg_toml = multiwifi_config_serialize(c_cfg);
-    g_assert_nonnull(cfg_toml);
+    /* Feed valid TOML multiwifi.conf directly to Rust daemon */
+    const gchar *cfg_toml =
+        "schema_version = 1\n"
+        "mode = \"load_balance\"\n"
+        "\n"
+        "[load_balance]\n"
+        "strategy = \"weighted_round_robin\"\n"
+        "health_check_interval_ms = 1500\n"
+        "failure_threshold = 3\n"
+        "recovery_threshold = 3\n"
+        "cooldown_ms = 5000\n"
+        "\n"
+        "[[uplinks]]\n"
+        "device_id = \"wlan0\"\n"
+        "enabled = true\n"
+        "weight = 150\n"
+        "\n"
+        "[bonding]\n"
+        "enabled = false\n"
+        "profile_id = \"default\"\n";
     gchar *cfg_path = g_build_filename(tmp_dir, "multiwifi.conf", NULL);
     g_assert_true(g_file_set_contents(cfg_path, cfg_toml, -1, &err));
     g_assert_no_error(err);
-    g_free(cfg_toml);
-    multiwifi_config_free(c_cfg);
 
     PrivateDbus *bus = private_dbus_start();
     SpawnedDaemon *daemon = spawn_rust_daemon(bus->address, FALSE, cfg_path, tmp_dir, resolv_path);
@@ -912,40 +923,58 @@ static void test_polkit_enforcement_and_sigterm(void)
     private_dbus_stop(bus);
 }
 
-static void test_config_and_journal_schema_parity(void)
+static void test_config_secret_rejection_resilience(void)
 {
     GError *err = NULL;
-    gchar *tmp_dir = g_dir_make_tmp("multiwifi_schema_parity_XXXXXX", &err);
+    gchar *tmp_dir = g_dir_make_tmp("multiwifi_cfg_parity_XXXXXX", &err);
     g_assert_no_error(err);
 
-    /* C-serialized journal must match Rust RouteJournal INI keys */
-    gchar *journal_path = g_build_filename(tmp_dir, "op-parity.journal", NULL);
-    MultiWifiRouteJournal *j = multiwifi_route_journal_new("op-parity");
-    multiwifi_route_journal_append(
-        j, multiwifi_journal_entry_new(MULTIWIFI_JOURNAL_OP_ADD_RULE, 10001, 21001, 0x1001, 0xff00, NULL, NULL, "wlan0", 0)
+    gchar *cfg_path = g_build_filename(tmp_dir, "secret.conf", NULL);
+    const gchar *secret_toml =
+        "schema_version = 1\n"
+        "mode = \"load_balance\"\n"
+        "[bonding]\n"
+        "enabled = false\n"
+        "token = \"must-not-be-accepted\"\n";
+    g_assert_true(g_file_set_contents(cfg_path, secret_toml, -1, &err));
+    g_assert_no_error(err);
+
+    PrivateDbus *bus = private_dbus_start();
+    SpawnedDaemon *daemon = spawn_rust_daemon(bus->address, FALSE, cfg_path, NULL, NULL);
+    GDBusConnection *conn = connect_and_wait_daemon(bus->address);
+
+    /* Daemon ignores forbidden-secret config safely and serves healthy idle status */
+    GVariant *status_reply = g_dbus_connection_call_sync(
+        conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
+        "GetStatus", NULL, G_VARIANT_TYPE("(a{sv})"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
     );
-    multiwifi_route_journal_append(
-        j, multiwifi_journal_entry_new(MULTIWIFI_JOURNAL_OP_ADD_ROUTE, 10001, 0, 0, 0, NULL, "192.168.1.1", "wlan0", 100)
+    g_assert_no_error(err);
+    GVariant *status_dict = NULL;
+    g_variant_get(status_reply, "(@a{sv})", &status_dict);
+    const gchar *mode = NULL;
+    g_assert_true(g_variant_lookup(status_dict, "mode", "&s", &mode));
+    g_assert_cmpstr(mode, ==, "idle");
+    g_variant_unref(status_dict);
+    g_variant_unref(status_reply);
+
+    GVariant *stop_reply = g_dbus_connection_call_sync(
+        conn, MULTIWIFI_DBUS_NAME, MULTIWIFI_DBUS_PATH, MULTIWIFI_DBUS_INTERFACE,
+        "StopDaemon", NULL, NULL, G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err
     );
-    g_assert_true(multiwifi_route_journal_save_to_file(j, journal_path, &err));
     g_assert_no_error(err);
-    multiwifi_route_journal_free(j);
+    g_variant_unref(stop_reply);
 
-    gchar *ini_text = NULL;
-    g_assert_true(g_file_get_contents(journal_path, &ini_text, NULL, &err));
-    g_assert_no_error(err);
-    g_assert_nonnull(strstr(ini_text, "[journal]"));
-    g_assert_nonnull(strstr(ini_text, "op_id=op-parity"));
-    g_assert_nonnull(strstr(ini_text, "count=2"));
-    g_assert_nonnull(strstr(ini_text, "[entry_0]"));
-    g_assert_nonnull(strstr(ini_text, "table_id=10001"));
-    g_assert_nonnull(strstr(ini_text, "[entry_1]"));
-    g_assert_nonnull(strstr(ini_text, "gateway=192.168.1.1"));
+    int exit_code = -1;
+    g_assert_true(wait_daemon_exit(daemon, &exit_code, 5000000));
+    g_assert_cmpint(exit_code, ==, 0);
 
-    g_free(ini_text);
-    g_unlink(journal_path);
+    g_object_unref(conn);
+    free_spawned_daemon(daemon);
+    private_dbus_stop(bus);
+
+    g_unlink(cfg_path);
     g_rmdir(tmp_dir);
-    g_free(journal_path);
+    g_free(cfg_path);
     g_free(tmp_dir);
 }
 
@@ -956,7 +985,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/rust_parity/introspection_and_read_contract", test_introspection_and_read_contract);
     g_test_add_func("/rust_parity/mutating_methods_signals_and_dns", test_mutating_methods_signals_and_dns);
     g_test_add_func("/rust_parity/polkit_enforcement_and_sigterm", test_polkit_enforcement_and_sigterm);
-    g_test_add_func("/rust_parity/config_and_journal_schema_parity", test_config_and_journal_schema_parity);
+    g_test_add_func("/rust_parity/config_secret_rejection_resilience", test_config_secret_rejection_resilience);
 
     return g_test_run();
 }

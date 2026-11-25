@@ -51,7 +51,7 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 | **D-Bus IPC Mean Latency** | N/A | **437 µs** (`GDBus` C suite) | Instantaneous GUI responsiveness |
 | **DNS Switching Latency** | N/A | **1.8 ms** (Atomic symlink-safe switch) | Zero DNS downtime |
 | **Probe Fallback Responsiveness**| N/A | **250 ms / port (DNS 53 -> HTTP 80 -> HTTPS 443)** | Resilient on strict APs |
-| **Memory Safety & Linting** | N/A | **0 Rust `unsafe` in daemon + 0 ASan/LSan leaks across C suites** | Clean `rustfmt` & `clippy -D warnings`, `48` Rust tests + `10` CTest suites (`100%`) |
+| **Memory Safety & Linting** | N/A | **0 Rust `unsafe` in daemon + 0 ASan/LSan leaks across C suites** | Clean `rustfmt` & `clippy -D warnings`, `48` Rust tests + `5` CTest suites (`100%`) |
 | **Memory Footprint (RSS)** | N/A | **9.3–9.9 MB (Rust Daemon) + ~28 MB (GTK4 GUI baseline)** | Zero GLib/libnm linkage in Rust daemon |
 
 ---
@@ -119,7 +119,7 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 **Objective:** Evaluate the computational overhead of the Weighted Round-Robin (WRR) and 5-tuple flow hashing engine.
 
 **Methodology:**
-- Test suite: `tests/test_load_balancer.c`.
+- Test suite: historical C core scheduler microbenchmark (migrated to `crates/multiwifi-core/src/load_balancer.rs`).
 - Execution: 1,000,000 sequential routing decisions simulated with randomly generated flow hashes (`src_ip`, `dst_ip`, `src_port`, `dst_port`, `proto`).
 - Compiler flags: `-O2 -Wall -Wextra -Wpedantic`.
 
@@ -136,7 +136,7 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 **Objective:** Measure raw packet parsing and synchronization throughput of the MPTCP bonding protocol engine.
 
 **Methodology:**
-- Test suite: `tests/test_bonding.c` (plus parity unit/integration checks in `crates/multiwifi-core/src/bonding_protocol.rs` & `bonding_client.rs`).
+- Test suite: historical C core bonding parser microbenchmark (migrated to `crates/multiwifi-core/src/bonding_protocol.rs` & `bonding_client.rs`).
 - Input data: Stream of framed MultiWiFi packets (`0x4d574631` `"MWF1"` magic header, 16-byte header with version, frame type, flags, 16-bit payload length, and sequence number).
 - Fault injection: Randomized malformed bytes injected into stream to verify auto-resync performance.
 - Anti-spoofing check: Verification that spoofed source packets (`127.0.0.1`) are dropped.
@@ -199,9 +199,9 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
   - Enforces `#![deny(unsafe_code)]` in `multiwifi-daemon` and `#![deny(unsafe_op_in_unsafe_fn)]` in `multiwifi-core`.
   - `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`: **0 issues / 0 warnings**.
   - `cargo test --workspace`: **48/48 tests passed** (`38` in `multiwifi-core` in **0.21 s**, `10` in `multiwifi-daemon` in **0.09 s**).
-- **C11 GUI, C Core Sanitizers & Live Parity (`ctest`):**
-  - ASan + LSan + UBSan (`-DMULTIWIFI_BUILD_DAEMON=OFF`, `9/9` C suites): **0 bytes leaked / 0 UB errors**.
-  - Release build (`MULTIWIFI_BUILD_DAEMON=ON`, `10/10` CTest suites including `test_rust_parity`): **10/10 (100%)**.
+- **C11 GUI, Sanitizers & Live Parity (`ctest`):**
+  - ASan + LSan + UBSan (`-DMULTIWIFI_BUILD_DAEMON=OFF`, C GUI-support + packaging suites): **0 bytes leaked / 0 UB errors**.
+  - Release build (`MULTIWIFI_BUILD_DAEMON=ON`, `5/5` CTest suites including `test_rust_parity`): **5/5 (100%)**.
 
 ---
 

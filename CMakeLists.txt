@@ -58,30 +58,6 @@ target_include_directories(multiwifi-gui-support PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# C core regression/test compatibility library (strictly compiled for BUILD_TESTING=ON)
-if(BUILD_TESTING)
-    add_library(multiwifi-core STATIC
-        src/core/config.c
-        src/core/operation.c
-        src/core/journal.c
-        src/core/netlink_route.c
-        src/core/routing_manager.c
-        src/core/load_balancer.c
-        src/core/firewall.c
-        src/core/bonding_protocol.c
-        src/core/tun_device.c
-        src/core/loop_prevention.c
-        src/core/bonding_client.c
-    )
-    target_link_libraries(multiwifi-core PUBLIC
-        multiwifi-gui-support
-        PkgConfig::NFTABLES
-    )
-    target_include_directories(multiwifi-core PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-endif()
-
 # Unprivileged GTK4 GUI executable (C11)
 add_executable(multiwifi-gui
     src/gui/main.c

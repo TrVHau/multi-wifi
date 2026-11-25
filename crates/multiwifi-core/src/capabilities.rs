@@ -165,15 +165,15 @@ mod tests {
     #[test]
     fn probe_sync_does_not_panic_and_reports_kernel() {
         let caps = Capabilities::probe_sync();
-        assert!(!caps.kernel_version.is_empty());
-        assert!(!caps.mptcp_details.is_empty());
+        assert_ne!(caps.kernel_version, "");
+        assert_ne!(caps.mptcp_details, "");
         assert_ne!(caps.network_manager, CapState::Unknown);
     }
 
     #[tokio::test]
     async fn probe_async_completes_within_budget() {
         let caps = Capabilities::probe_async().await;
-        assert!(!caps.kernel_version.is_empty());
+        assert_ne!(caps.kernel_version, "");
         assert_ne!(caps.network_manager, CapState::Unknown);
     }
 }

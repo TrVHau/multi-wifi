@@ -258,7 +258,7 @@ MultiWifiPathMonitor *multiwifi_path_monitor_new(void)
 }
 
 void multiwifi_path_monitor_set_config(MultiWifiPathMonitor *self,
-                                       const MultiWifiLoadBalanceConfig *config)
+                                       const MultiWifiPathMonitorConfig *config)
 {
     if (self == NULL || config == NULL) {
         return;

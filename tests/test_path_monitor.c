@@ -64,8 +64,7 @@ static void test_hysteresis_recovery_and_failure(void)
     multiwifi_path_monitor_set_probe_func(mon, mock_probe, &mock_ctx);
 
     /* Configure thresholds: 3 failures to drop, 3 successes to recover */
-    MultiWifiLoadBalanceConfig cfg = {
-        .strategy = MULTIWIFI_STRATEGY_WEIGHTED_ROUND_ROBIN,
+    MultiWifiPathMonitorConfig cfg = {
         .health_check_interval_ms = 1000,
         .failure_threshold = 3,
         .recovery_threshold = 3,

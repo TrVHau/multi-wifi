@@ -401,7 +401,7 @@ mod tests {
         sched.add_or_update(&uplink("wlan0", 0x1001, 100, false, 100));
         assert_eq!(sched.eligible_count(), 0);
         assert_eq!(sched.select_mark(), 0);
-        assert!(sched.distribution().is_empty());
+        assert_eq!(sched.distribution(), [] as [u32; 0]);
     }
 
     #[test]

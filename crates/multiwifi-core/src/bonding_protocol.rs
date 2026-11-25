@@ -418,7 +418,7 @@ mod tests {
         for (idx, byte) in ping.iter().enumerate() {
             let out = parser.feed(std::slice::from_ref(byte)).expect("feed byte");
             if idx + 1 < ping.len() {
-                assert!(out.is_empty());
+                assert_eq!(out, [] as [Frame; 0]);
             } else {
                 assert_eq!(out.len(), 1);
                 assert_eq!(out[0].frame_type, FrameType::Ping);

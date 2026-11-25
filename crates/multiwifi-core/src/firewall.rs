@@ -334,7 +334,7 @@ mod tests {
     fn netns_firewall_lifecycle() {
         // Test in a forked isolated user+net namespace so the host process namespace is untouched.
         // Note: on systems where AppArmor/kernel restricts unprivileged nftables inside userns,
-        // Operation not permitted is treated identically to test_load_balancer.c (skip safely).
+        // Operation not permitted is skipped safely.
         use nix::sched::{unshare, CloneFlags};
         use nix::sys::wait::{waitpid, WaitStatus};
         use nix::unistd::{fork, ForkResult};

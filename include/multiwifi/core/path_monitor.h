@@ -3,9 +3,15 @@
 
 #include <glib-object.h>
 #include "multiwifi/core/wifi_device.h"
-#include "multiwifi/core/config.h"
 
 G_BEGIN_DECLS
+
+typedef struct {
+    guint health_check_interval_ms;
+    guint failure_threshold;
+    guint recovery_threshold;
+    guint cooldown_ms;
+} MultiWifiPathMonitorConfig;
 
 typedef enum {
     MULTIWIFI_PATH_STATE_UNKNOWN = 0,
@@ -110,7 +116,7 @@ MultiWifiPathMonitor *multiwifi_path_monitor_new(void);
  * @config: Load balance config settings (thresholds, interval, cooldown)
  */
 void multiwifi_path_monitor_set_config(MultiWifiPathMonitor *self,
-                                       const MultiWifiLoadBalanceConfig *config);
+                                       const MultiWifiPathMonitorConfig *config);
 
 /**
  * multiwifi_path_monitor_set_probe_func:
