@@ -244,6 +244,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "multiwifi-daemon"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "libc",
+ "multiwifi-core",
+ "nix 0.32.0",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+ "zbus",
+]
+
+[[package]]
 name = "netlink-packet-core"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -624,6 +640,7 @@ version = "1.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
 dependencies = [
+ "getrandom",
  "js-sys",
  "serde_core",
  "wasm-bindgen",

@@ -1,0 +1,23 @@
+[package]
+name = "multiwifi-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Privileged D-Bus system daemon for MultiWiFi network orchestration"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures-util = "0.3"
+libc = "0.2"
+multiwifi-core = { path = "../multiwifi-core" }
+nix = { version = "0.32", features = ["fs", "net", "signal", "user"] }
+serde = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
+zbus = { version = "6", default-features = false, features = ["proxy", "service", "tokio"] }
+
+[dev-dependencies]
+tempfile = "3"
