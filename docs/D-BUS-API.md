@@ -8,7 +8,7 @@ This document defines the complete D-Bus IPC specification for `multiwifi-daemon
 
 | Coordinate | Value | Description |
 | :--- | :--- | :--- |
-| **Bus Type** | `G_BUS_TYPE_SYSTEM` | System Message Bus |
+| **Bus Type** | System D-Bus | Served via `zbus` (`crates/multiwifi-daemon`), consumed by GTK4 GUI (`GDBusConnection`) |
 | **Well-Known Name** | `io.github.multiwifi.Daemon` | Owned by `multiwifi-daemon` |
 | **Object Path** | `/io/github/multiwifi/Daemon` | Primary service singleton |
 | **Interface** | `io.github.multiwifi.Daemon1` | Primary daemon interface |
@@ -36,11 +36,11 @@ Returns the MultiWiFi daemon semantic version string and integer API version.
 Queries current host kernel and platform capabilities.
 - **Returns:** Dictionary of capabilities:
   - `kernel_version` (`s`): Host Linux kernel release string
-  - `mptcp_state` (`s`): `"active"`, `"inactive"`, or `"unsupported"`
+  - `mptcp_state` (`s`): `"Active"`, `"Available (Inactive)"`, `"Unsupported"`, or `"Unknown"`
   - `mptcp_details` (`s`): Diagnostic details on kernel MPTCP support/sysctl
-  - `nftables_state` (`s`): `"active"`, `"inactive"`, or `"unsupported"`
-  - `tun_state` (`s`): `"active"`, `"inactive"`, or `"unsupported"`
-  - `network_manager_state` (`s`): `"active"`, `"inactive"`, or `"unsupported"`
+  - `nftables_state` (`s`): `"Active"`, `"Available (Inactive)"`, `"Unsupported"`, or `"Unknown"`
+  - `tun_state` (`s`): `"Active"`, `"Available (Inactive)"`, `"Unsupported"`, or `"Unknown"`
+  - `network_manager_state` (`s`): `"Active"`, `"Available (Inactive)"`, `"Unsupported"`, or `"Unknown"`
 
 ---
 
@@ -131,7 +131,7 @@ Starts MPTCP tunnel aggregation through a remote bonding relay server.
 
 ### `StopBonding() -> (operation_id: s)`
 *(Requires Polkit: `io.github.multiwifi.modify`)*  
-Tears down the `mw-tun0` tunnel device and restores original default routing.
+Tears down the `mwtun0` tunnel device and restores original default routing.
 - **Returns:**
   - `operation_id` (`s`): Tracking operation ID.
 

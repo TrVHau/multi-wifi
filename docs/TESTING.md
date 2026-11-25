@@ -1,82 +1,78 @@
 # MultiWiFi Testing & Quality Assurance
 
-This document outlines the testing strategy, test suites, network namespace isolation, sanitizer verification, and fault-injection scenarios for MultiWiFi.
+This document outlines the automated testing strategy covering both the Rust workspace (`multiwifi-core`, `multiwifi-daemon`) and the C11/GTK4 GUI & packaging suites (`ctest`).
 
 ---
 
-## 1. Automated Test Suites (CTest)
+## 1. Rust Workspace Test Suites (`cargo test --workspace`)
 
-MultiWiFi provides 9 comprehensive automated test suites implemented in C11 using the GLib Test Framework (`g_test_*`):
+All core networking primitives and the `zbus` system daemon are verified via Rust unit and integration tests compiled strictly with `cargo clippy --workspace --all-targets -- -D warnings`:
 
-| Test Target | Component Under Test | Focus & Verification Area |
-| :--- | :--- | :--- |
-| **`test_config`** | `src/core/config.c` | TOML parsing, schema version validation, numeric range bounds, quotation sanitization, identifier safety. |
-| **`test_capabilities`**| `src/core/capabilities.c` | Linux kernel version probing, MPTCP capability detection, nftables library checks, TUN device availability, NetworkManager D-Bus presence. |
-| **`test_wifi_device`** | `src/core/wifi_device.c` | Device lifecycle, state machine transitions, hardware bus categorization (`PCIe`, `USB`), NetworkManager device mapping. |
-| **`test_path_monitor`**| `src/core/path_monitor.c` | Multi-port socket fallback probe (DNS 53 -> HTTP 80 -> HTTPS 443), hysteresis (3 successes to recover, 3 failures to drop), RTT smoothing, loss calculation, D-Bus signal path updates, thread safety. |
-| **`test_dbus_daemon`** | `src/daemon/service.c` | D-Bus IPC methods, lifecycle state machine, DNS methods (`GetDNS`, `SetDNS`, `ResetDNS`), Polkit authorization simulation, bounded operation queue (50 items max). |
-| **`test_routing_manager`**| `src/core/routing_manager.c`| Network namespace isolation, policy routing tables ($201 \dots 200+N$), fwmark & source rule preferences ($11000 / 10000$), disk-backed journals, atomic rollback, recovery on startup. |
-| **`test_load_balancer`**| `src/core/load_balancer.c` | Weighted Round-Robin scheduling, GCD weight normalization, flow hash distribution, nftables dual-table lifecycle (`inet` + `ip`), zero NAT table leaks. |
-| **`test_bonding`** | `src/core/bonding_client.c` | MPTCP framed streaming protocol, magic header (`0x4D574246`) verification, auto-resync, HMAC token authentication, anti-spoofing packet validation (dropping loopback source IP), routing loop prevention. |
-| **`test_packaging`** | `packaging/` | FHS filesystem compliance, systemd service security directives, AppImage desktop integration, Polkit rule syntax. |
+- **`multiwifi-core` (38 tests):**
+  - `config` (7 tests): TOML validation, strict schema version check, secret rejection, duplicate uplink check, symlink refusal, valid roundtrip.
+  - `journal` (2 tests): journal save/load/remove roundtrip and symlink refusal.
+  - `load_balancer` (4 tests): equal/unequal GCD WRR distribution, health penalty failover, multi-thread concurrency stress.
+  - `bonding_protocol` (5 tests): `AuthReq`/`AuthResp` roundtrip, truncated/mismatched validation, 1-byte streaming, concatenated framing, garbage & bad-version resync around `0x4d574631`.
+  - `capabilities` (2 tests): sync & async kernel/NM D-Bus capability probing within time budgets.
+  - `firewall` (3 tests): invalid fwmark rejection, nftables dual-table rule builder (`ct mark` affinity + `flush`), forked isolated user+net namespace apply/verify/teardown lifecycle.
+  - `netlink_route` (2 tests): CIDR stripping, isolated namespace `rtnetlink` rule & default route CRUD + verification (`table_id > 255`).
+  - `loop_prevention` (2 tests): `127.0.0.0/8` skip behavior, isolated namespace `/32` host-route pin and rollback.
+  - `routing_manager` (2 tests): conflict validation, isolated namespace apply -> verify -> teardown, partial failure atomic rollback, and orphaned `.journal` crash recovery.
+  - `path_monitor` (4 tests): state string roundtrip, hysteresis (`3` successes / `3` failures), device disconnect/removal/manual updates, non-blocking `TcpSocket` port probing & `ECONNREFUSED` detection.
+  - `tun_device` (1 test): non-blocking mock TUN `socketpair` open, IP validation, packet read/write, close lifecycle.
+  - `bonding_client` (4 tests): secret token debug redaction, IPv4 anti-spoofing validator, auth rejection/invalid config rollback, end-to-end mock TCP server auth + TUN echo + spoofed packet drop + graceful disconnect.
+- **`multiwifi-daemon` (9 tests):**
+  - `operation` (1 test): bounded 50-entry UUID queue lifecycle and pruning.
+  - `dns` (2 tests): validation (`1–16` IPv4/IPv6), atomic apply/backup/restore roundtrip, symlink traversal refusal.
+  - `nm_client` (2 tests): NetworkManager state mapping and `/proc/net/route` gateway parsing.
+  - `service` (4 tests): live Session D-Bus roundtrip (`GetVersion`, `GetCapabilities`, `GetDevices`, `GetPaths`, `GetStatus`, `SetPathWeight`, `StopLoadBalancing`, `StopBonding`, `RunDiagnostics` rate-limit, `GetDiagnostics`, `GetDNS`/`SetDNS`/`ResetDNS`), `OperationProgress`/`OperationFinished` signals, Polkit rejection on Session Bus, and DNS/Bonding hardening checks.
 
 ---
 
-## 2. Running Automated Tests
+## 2. CMake / CTest Regression & Packaging Suites (`ctest`)
 
-### Standard Test Execution
+MultiWiFi also retains 9 CTest regression & packaging verification suites built cleanly with `-Wall -Wextra -Wpedantic`:
+
+| Test Target | Focus & Verification Area |
+| :--- | :--- |
+| **`test_config`** | C TOML config validation parity (schema bounds, secrets, duplicate uplinks, overflows). |
+| **`test_capabilities`** | Safe kernel probing and logging secret-redaction checks. |
+| **`test_wifi_device`** | `libnm` device inventory structs and state transitions. |
+| **`test_path_monitor`** | Hysteresis state machine, RTT smoothing, and mock socket probes. |
+| **`test_dbus_daemon`** | Legacy C daemon D-Bus IPC, signals, Polkit denial, and DNS symlink hardening parity. |
+| **`test_routing_manager`** | Isolated namespace routing transactions, journal persistence, atomic rollback, crash recovery. |
+| **`test_load_balancer`** | WRR scheduling, GCD normalization, concurrency, and netfilter dual-table teardown. |
+| **`test_bonding`** | Framing (`0x4d574631`), mock TUN, loop prevention, and mock server handshake. |
+| **`test_packaging`** | D-Bus policy XML, Polkit rules, systemd unit sandboxing, desktop isolation, Arch/Debian/RPM manifests, and portable GUI AppDir isolation. |
+
+---
+
+## 3. Running Automated Tests & Sanitizers
+
+### Rust Lint & Test Suite
 ```bash
-# Build with testing enabled
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace -- --nocapture
+```
+
+### CMake Build & CTest Suite
+```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-cmake --build build -j$(nproc)
-
-# Run all 9 test suites
-ctest --test-dir build --output-on-failure
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure --verbose
 ```
 
-### Verbose Execution of a Specific Test
+### Memory Safety & Sanitizer Verification (ASan / LSan / UBSan on C Modules)
 ```bash
-# Run test_path_monitor with detailed step logs
-./build/tests/test_path_monitor --verbose
+cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DMULTIWIFI_RUST_DAEMON=OFF \
+  -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+cmake --build build-asan -j"$(nproc)"
+ctest --test-dir build-asan --output-on-failure --verbose
 ```
-
----
-
-## 3. Memory Safety & Sanitizer Verification (ASan / LSan / UBSan)
-
-In accordance with `AGENTS.md`, MultiWiFi is regularly verified using LLVM/GCC sanitizers to guarantee **zero memory leaks** and **zero undefined behavior**:
-
-```bash
-# Configure and build with AddressSanitizer and UndefinedBehaviorSanitizer
-cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
-cmake --build build-asan -j$(nproc)
-
-# Run test suite under sanitizers
-ctest --test-dir build-asan --output-on-failure
-```
-
-### Sanitizer Quality Standards
-- **Zero Heap Leaks:** All allocated structures (`MultiWifiPathInfo`, `MultiWifiDeviceInfo`, `GVariant`, `GPtrArray`) must have matching free functions.
-- **Zero Use-After-Free (UAF):** Asynchronous GTK4 callbacks must track active async task counters (`active_async_tasks`) and cancel tokens safely.
-- **Clean File Descriptor Lifetimes:** All descriptors must have `O_CLOEXEC` and be closed upon object disposal.
 
 ---
 
 ## 4. Network Namespace Isolation
 
-Integration tests for policy routing and nftables execute inside temporary Linux network namespaces:
-1. Creates an isolated network namespace (`ip netns add mw-test-ns`).
-2. Creates virtual ethernet pairs (`veth0` $\leftrightarrow$ `veth1`).
-3. Executes routing and netfilter modifications entirely within the isolated namespace.
-4. **Safety Guarantee:** The host workstation's default routes, active Wi-Fi connections, and external network traffic are never touched or modified during testing.
-
----
-
-## 5. Fault Injection Scenarios
-
-MultiWiFi tests include negative and fault-injection cases:
-- **Router Dropping Port 53:** Verified that `test_path_monitor` successfully falls back to port 80 and port 443 without false-negative link drops.
-- **Malformed MPTCP Stream:** Verified that corrupted packets or garbage data injected into the bonding stream are discarded and the parser realigns to the next `0x4D574246` boundary.
-- **Spoofed Packet Injection:** Verified that packets arriving via TUN with forged source address `127.0.0.1` are dropped immediately.
-- **Unbounded Queue Overflow:** Verified that rapid creation of operations does not consume RAM beyond the 50-item limit.
-- **Dialog Destruction During Async Operation:** Verified that closing dialog windows while scanning Wi-Fi or applying DNS does not cause heap corruption or crash.
+Kernel routing, loop prevention, and `nftables` tests run inside forked child processes entering unprivileged Linux user + network namespaces (`unshare(CLONE_NEWUSER | CLONE_NEWNET)`), configuring `lo` directly via Netlink without touching host workstation routes or active Wi-Fi connections. In Rust tests, child panics are caught with `std::panic::catch_unwind` and mapped to non-zero exit codes checked by `waitpid`.

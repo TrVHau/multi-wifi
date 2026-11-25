@@ -5,6 +5,8 @@ Maintainer: MultiWiFi Team <support@multiwifi.local>
 Build-Depends: debhelper-compat (= 13),
                cmake (>= 3.20),
                pkg-config,
+               cargo,
+               rustc,
                libgtk-4-dev (>= 4.10),
                libglib2.0-dev (>= 2.74),
                libnm-dev (>= 1.40),
@@ -23,7 +25,8 @@ Depends: ${shlibs:Depends},
          libpolkit-gobject-1-0,
          libnftables1
 Description: Native Linux multi-path Wi-Fi load balancing and MPTCP bonding
- MultiWiFi is a native Linux desktop application built with C11 and GTK4.
+ MultiWiFi is a hybrid native Linux desktop application combining an
+ unprivileged C11/GTK4 GUI with a privileged Rust system daemon (`multiwifi-daemon`).
  It manages multiple active Wi-Fi uplinks, providing flow-affinity load
  balancing across independent NetworkManager connections and high-throughput
  MPTCP bonding through remote aggregation endpoints.

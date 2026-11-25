@@ -7,7 +7,7 @@ arch=('x86_64')
 url="https://github.com/TrVHau/multi-wifi"
 license=('MIT')
 depends=('gtk4>=4.10' 'glib2>=2.74' 'libnm>=1.40' 'polkit' 'nftables')
-makedepends=('cmake' 'ninja' 'pkgconf')
+makedepends=('cmake' 'ninja' 'pkgconf' 'rust')
 install=multiwifi.install
 source=()
 

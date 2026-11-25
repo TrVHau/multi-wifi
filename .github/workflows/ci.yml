@@ -30,18 +30,29 @@ jobs:
             dbus-daemon \
             zstd
 
-      - name: Configure CMake
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Check Rust Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Rust Workspace Tests
+        run: cargo test --workspace --verbose
+
+      - name: Configure CMake (GUI + Rust Daemon)
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 
       - name: Build
         run: cmake --build build
 
-      - name: Run Unit Tests
+      - name: Run C Test Suites
         run: ctest --test-dir build --output-on-failure --verbose
 
-      - name: Test AddressSanitizer & UndefinedBehaviorSanitizer
+      - name: Test C AddressSanitizer & UndefinedBehaviorSanitizer
         run: |
-          cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+          cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DMULTIWIFI_RUST_DAEMON=OFF \
             -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           cmake --build build-asan

@@ -38,13 +38,42 @@ check_root() {
     fi
 }
 
-do_install() {
-    check_root "install"
-    echo -e "${BLUE}${BOLD}==> Bắt đầu cài đặt MultiWiFi vào hệ thống...${NC}"
+ensure_cargo_in_path() {
+    if ! command -v cargo >/dev/null 2>&1; then
+        if [ -n "${SUDO_USER:-}" ]; then
+            local sudo_home
+            sudo_home="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+            if [ -n "$sudo_home" ] && [ -x "$sudo_home/.cargo/bin/cargo" ]; then
+                export PATH="$sudo_home/.cargo/bin:$PATH"
+                export CARGO_HOME="${CARGO_HOME:-$sudo_home/.cargo}"
+                export RUSTUP_HOME="${RUSTUP_HOME:-$sudo_home/.rustup}"
+            fi
+        elif [ -x "$HOME/.cargo/bin/cargo" ]; then
+            export PATH="$HOME/.cargo/bin:$PATH"
+        fi
+    fi
+}
 
+do_install() {
+    if [ "$(id -u)" -ne 0 ]; then
+        ensure_cargo_in_path
+        echo -e "${BLUE}${BOLD}==> Bắt đầu biên dịch và cài đặt MultiWiFi vào hệ thống...${NC}"
+        echo -e "${BLUE}1/4. Kiểm tra và biên dịch mã nguồn GUI (C11/GTK4) + Daemon (Rust)...${NC}"
+        cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+        cmake --build build -j"$(nproc)"
+        echo -e "${YELLOW}Chuyển sang quyền quản trị (sudo) để cài đặt hệ thống...${NC}"
+        exec sudo -E "$0" install-prebuilt
+    fi
+    ensure_cargo_in_path
+    echo -e "${BLUE}${BOLD}==> Bắt đầu cài đặt MultiWiFi vào hệ thống...${NC}"
     echo -e "${BLUE}1/4. Kiểm tra và biên dịch mã nguồn (/usr)...${NC}"
-    cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+    cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
     cmake --build build -j"$(nproc)"
+    do_install_steps
+}
+
+do_install_steps() {
+    check_root "install-prebuilt"
 
     echo -e "${BLUE}2/4. Cài đặt các tệp tin vào hệ thống...${NC}"
     cmake --install build
@@ -68,7 +97,7 @@ do_install() {
     echo -e "${GREEN}${BOLD}=================================================================${NC}"
     echo -e "${GREEN}${BOLD}✔ CÀI ĐẶT MULTIWIFI HOÀN TẤT THÀNH CÔNG!${NC}"
     echo -e "${GREEN}${BOLD}=================================================================${NC}"
-    echo -e "• Daemon chạy ngầm:   ${GREEN}Active (systemd)${NC}"
+    echo -e "• Daemon chạy ngầm:   ${GREEN}Active (Rust systemd service)${NC}"
     echo -e "• Khởi chạy giao diện: Gõ lệnh ${BOLD}multiwifi-gui${NC} hoặc mở từ menu ứng dụng"
     echo -e "• Để gỡ cài đặt:        Chạy lệnh ${BOLD}sudo ./setup.sh uninstall${NC}"
     echo ""
@@ -198,6 +227,9 @@ case "$ACTION" in
         ;;
     install)
         do_install
+        ;;
+    install-prebuilt)
+        do_install_steps
         ;;
     uninstall|remove)
         do_uninstall

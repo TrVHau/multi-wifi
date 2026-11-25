@@ -9,6 +9,8 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  cmake >= 3.20
 BuildRequires:  gcc
+BuildRequires:  rust
+BuildRequires:  cargo
 BuildRequires:  pkgconfig
 BuildRequires:  gtk4-devel >= 4.10
 BuildRequires:  glib2-devel >= 2.74
@@ -26,7 +28,8 @@ Requires:       libnftables
 %{?systemd_requires}
 
 %description
-MultiWiFi is a native Linux desktop application built with C11 and GTK4.
+MultiWiFi is a hybrid native Linux desktop application combining an unprivileged
+C11/GTK4 desktop frontend with a privileged Rust system daemon.
 It manages multiple active Wi-Fi uplinks, providing flow-affinity load
 balancing across independent NetworkManager connections and high-throughput
 MPTCP bonding through remote aggregation endpoints.

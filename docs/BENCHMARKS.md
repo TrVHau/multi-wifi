@@ -13,7 +13,7 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 - **Kernel Version:** Linux `7.3.4-arch1-2`
 - **CPU:** 13th Gen Intel(R) Core(TM) i7-13700H (14 cores / 20 threads, base 400 MHz, turbo up to 5.0 GHz, 24MB L3 cache)
 - **Memory:** **32 GB DDR5/DDR4 RAM** (31 GiB usable: `MemTotal: 32541444 kB`)
-- **Toolchain:** GCC 15/16, Clang/LLVM, CMake 3.31, GTK 4.24, GLib 2.90, libnm 1.58, libnftables 1.1
+- **Toolchain:** GCC 15/16, Clang/LLVM, Rust/Cargo `1.95.0` (Edition 2021), CMake `3.31` / `4.5.1`, GTK `4.24`, GLib `2.90`, `libnm` `1.58`, `libnftables` `1.1`
 
 ### Physical Network Adapters & Uplinks
 
@@ -45,14 +45,14 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 | **Concurrent Dual-Link Download** | 21.20 Mbps (single interface) | **19.88 Mbps** (15.70M Viettel + 4.18M FPT) | Concurrent multi-provider stream distribution |
 | **Lowest Latency (Ping 8.8.8.8)** | 31.94 ms avg (Viettel) | **29.41 ms avg** (FPT Steering) | **-2.53 ms lower latency, 4x less jitter (0.85 ms vs 3.67 ms)** |
 | **Loss & Jitter (Ping 1.1.1.1)** | 87.6 ms avg, **20% loss, 244 ms max** (Viettel) | **25.80 ms avg, 0% loss, 0.78 ms jitter** (FPT) | **Saved connections from packet loss & 244 ms spikes** |
-| **Flow Scheduler Throughput** | N/A (single interface) | **17.40 Million decisions/s** | Zero-overhead CPU scheduling |
-| **Scheduling Decision Time** | N/A | **57.47 ns / decision** | Imperceptible packet delay |
-| **Bonding Parser Throughput** | N/A | **1,465 MB/s (~11.72 Gbps)** | Exceeds 10G line-rate |
-| **D-Bus IPC Mean Latency** | N/A | **437 µs** | Instantaneous GUI responsiveness |
+| **Flow Scheduler Throughput** | N/A (single interface) | **17.40 Million decisions/s** (C core microbenchmark) | Zero-overhead CPU scheduling |
+| **Scheduling Decision Time** | N/A | **57.47 ns / decision** (C core microbenchmark) | Imperceptible packet delay |
+| **Bonding Parser Throughput** | N/A | **1,465 MB/s (~11.72 Gbps)** (C core microbenchmark) | Exceeds 10G line-rate |
+| **D-Bus IPC Mean Latency** | N/A | **437 µs** (`GDBus` C suite) | Instantaneous GUI responsiveness |
 | **DNS Switching Latency** | N/A | **1.8 ms** (Atomic symlink-safe switch) | Zero DNS downtime |
 | **Probe Fallback Responsiveness**| N/A | **250 ms / port (DNS 53 -> HTTP 80 -> HTTPS 443)** | Resilient on strict APs |
-| **Memory Safety (ASan/LSan)** | N/A | **0 leaks, 0 errors across 9 test suites** | 100% memory safe |
-| **Memory Footprint (RSS)** | N/A | **8.1 MB (Daemon) + ~28 MB (GUI)** | Extremely lightweight on 32 GB system |
+| **Memory Safety & Linting** | N/A | **0 Rust `unsafe` in daemon + 0 ASan/LSan leaks across 9 C suites** | Clean `clippy -D warnings`, `47` Rust tests + `9` C suites |
+| **Memory Footprint (RSS)** | N/A | **9.3–9.9 MB (Rust Daemon) + ~28 MB (GTK4 GUI baseline)** | Zero GLib/libnm linkage in Rust daemon |
 
 ---
 
@@ -136,8 +136,8 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 **Objective:** Measure raw packet parsing and synchronization throughput of the MPTCP bonding protocol engine.
 
 **Methodology:**
-- Test suite: `tests/test_bonding.c`.
-- Input data: Stream of framed MultiWiFi packets (`0x4D574246` magic header, 16-bit payload length, sequence numbers, checksums).
+- Test suite: `tests/test_bonding.c` (plus parity unit/integration checks in `crates/multiwifi-core/src/bonding_protocol.rs` & `bonding_client.rs`).
+- Input data: Stream of framed MultiWiFi packets (`0x4d574631` `"MWF1"` magic header, 16-byte header with version, frame type, flags, 16-bit payload length, and sequence number).
 - Fault injection: Randomized malformed bytes injected into stream to verify auto-resync performance.
 - Anti-spoofing check: Verification that spoofed source packets (`127.0.0.1`) are dropped.
 
@@ -163,16 +163,17 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 
 ---
 
-### Test 6: Memory & CPU Footprint
-**Objective:** Quantify memory and CPU usage of MultiWiFi background processes.
+### Test 6: Binary Footprint, Shared Libraries & Memory Usage
+**Objective:** Quantify binary footprint, shared-library dependencies, and runtime memory usage of the Rust `multiwifi-daemon` (Phase 3) and C11/GTK4 `multiwifi-gui`.
 
-**Measured Data (via `/proc/<pid>/status` & `systemctl status`):**
+**Measured Data (Rust `multiwifi-daemon` via `rustc 1.95.0` Release build & `/proc/<pid>/status` on kernel `7.3.5-arch1-1`):**
 
-| Component | Resident Set Size (RSS) | Virtual Memory (VSZ) | CPU Usage (Idle) |
-| :--- | :--- | :--- | :--- |
-| `multiwifi-daemon` | **8.1 MB** (9.8 MB peak) | 319.4 MB | **< 0.4%** |
-| `multiwifi-gui` (GTK4) | **~28.0 MB** | 410.0 MB | **0.0%** |
-| Total System Overhead | **~36.1 MB** | — | **Negligible (< 0.1% of 32 GB RAM)** |
+| Component | Binary Size (Release) | Stripped Size | Resident Set Size (RSS) | Runtime Shared Libraries (`ldd`) |
+| :--- | :--- | :--- | :--- | :--- |
+| `multiwifi-daemon` (Rust, `zbus` + Tokio) | **8.23 MB** (`8,231,320` B) | **6.20 MB** (`6,198,096` B) | **9.30–9.86 MB** (`9,300`–`9,860` kB, 21 Tokio threads) | `libnftables`, `libc`, `libm`, `libgcc_s` (+ Netfilter deps; **zero GLib/libnm**) |
+| `multiwifi-gui` (C11 + GTK4) | **127.2 KB** (`130,296` B) | — | **~28.0 MB** (baseline workstation measurement) | GTK4, GLib/GIO, `libnm`, `libc` |
+
+*(Historical C baseline on workstation `daukuto`: legacy C `multiwifi-daemon` measured `8.1 MB` RSS / `9.8 MB` peak / `319.4 MB` VSZ and `< 0.4%` idle CPU.)*
 
 ---
 
@@ -184,24 +185,23 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 - Security checks: Verified `O_NOFOLLOW` / `lstat` protection against symlink redirection attacks.
 
 **Measured Data:**
-- Execution time: **1.8 ms** per DNS transition.
-- Backup creation: Clean automatic backup at `/etc/resolv.conf.multiwifi-backup`.
-- Consistency: 100% atomic switch via temporary file and `g_rename()`.
+- Execution time: **1.8 ms** per DNS transition (legacy C benchmark).
+- Backup & NM coordination: Clean automatic backup at `/run/multiwifi/resolv.conf.bak` alongside `/etc/NetworkManager/conf.d/99-multiwifi-dns.conf` (`dns=none` drop-in when overrides are active).
+- Consistency: 100% atomic switch via temporary file and atomic `rename` (Rust `std::fs::rename` / GLib `g_rename()`).
 
 ---
 
-### Test 8: Memory Safety & AddressSanitizer (ASan/LSan/UBSan)
-**Objective:** Verify that zero memory leaks, heap corruptions, or undefined behaviors occur during continuous operation.
+### Test 8: Memory Safety, Rust Hardening & Sanitizers
+**Objective:** Verify memory safety across both the migrated Rust workspace and the legacy C core / GUI components.
 
-**Methodology:**
-- Compilation: Built with `-fsanitize=address,undefined -fno-omit-frame-pointer`.
-- Execution: Ran all 9 unit test suites covering edge cases, async dialogs, netlink, and D-Bus.
-
-**Measured Data:**
-- Leaks detected: **0 bytes**
-- Use-After-Free detected: **0**
-- Undefined behaviors: **0**
-- Test suite pass rate: **9/9 (100%)**
+**Methodology & Measured Data:**
+- **Rust Workspace (`crates/multiwifi-core`, `crates/multiwifi-daemon`):**
+  - Enforces `#![deny(unsafe_code)]` in `multiwifi-daemon` and `#![deny(unsafe_op_in_unsafe_fn)]` in `multiwifi-core`.
+  - `cargo clippy --workspace --all-targets -- -D warnings`: **0 warnings**.
+  - `cargo test --workspace`: **47/47 tests passed** (`38` in `multiwifi-core` in **0.21 s**, `9` in `multiwifi-daemon` in **0.16 s**).
+- **C11 GUI & C Core Sanitizers (`-DMULTIWIFI_RUST_DAEMON=OFF` with `-fsanitize=address,undefined -fno-omit-frame-pointer`):**
+  - Leaks / Use-After-Free / Undefined behaviors detected: **0 bytes / 0 errors**.
+  - CTest suite pass rate: **9/9 (100%)** (Release build with Rust daemon + CTest: **1.97 s**).
 
 ---
 
@@ -222,12 +222,14 @@ All benchmarks were performed on a native bare-metal Linux workstation (`daukuto
 To reproduce these measurements on any Linux workstation:
 
 ```bash
-# 1. Build release binaries
+# 1. Verify Rust workspace lints and unit/integration tests
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+
+# 2. Build Release binaries (C11 GUI + Rust multiwifi-daemon) and run CTest suites
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build -j$(nproc)
-
-# 2. Run automated test benchmarks
-ctest --test-dir build --verbose
+ctest --test-dir build --output-on-failure --verbose
 
 # 3. Test simultaneous multi-path throughput
 curl -o /dev/null --interface wlp0s20f3 -s -w "Viettel: %{speed_download} B/s in %{time_total}s\n" "https://speed.cloudflare.com/__down?bytes=10000000" &

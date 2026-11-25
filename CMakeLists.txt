@@ -20,14 +20,21 @@ add_compile_options(
     -Wshadow
 )
 
+option(MULTIWIFI_RUST_DAEMON "Build privileged multiwifi-daemon from Rust workspace (crates/multiwifi-daemon)" ON)
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0>=2.74)
 pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0>=2.74)
 pkg_check_modules(GIO_UNIX REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.74)
 pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4>=4.10)
 pkg_check_modules(NM REQUIRED IMPORTED_TARGET libnm>=1.40)
-pkg_check_modules(POLKIT REQUIRED IMPORTED_TARGET polkit-gobject-1)
-pkg_check_modules(NFTABLES REQUIRED IMPORTED_TARGET libnftables)
+
+include(CTest)
+
+if(BUILD_TESTING OR NOT MULTIWIFI_RUST_DAEMON)
+    pkg_check_modules(POLKIT REQUIRED IMPORTED_TARGET polkit-gobject-1)
+    pkg_check_modules(NFTABLES REQUIRED IMPORTED_TARGET libnftables)
+endif()
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -52,31 +59,33 @@ target_include_directories(multiwifi-gui-support PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Full core + daemon library (legacy C modules being migrated incrementally to crates/)
-add_library(multiwifi-core STATIC
-    src/core/config.c
-    src/core/operation.c
-    src/core/journal.c
-    src/core/netlink_route.c
-    src/core/routing_manager.c
-    src/core/load_balancer.c
-    src/core/firewall.c
-    src/core/bonding_protocol.c
-    src/core/tun_device.c
-    src/core/loop_prevention.c
-    src/core/bonding_client.c
-    src/daemon/service.c
-)
-target_link_libraries(multiwifi-core PUBLIC
-    multiwifi-gui-support
-    PkgConfig::POLKIT
-    PkgConfig::NFTABLES
-)
-target_include_directories(multiwifi-core PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
+# Full legacy C core + daemon library (used by legacy C tests or when MULTIWIFI_RUST_DAEMON=OFF)
+if(BUILD_TESTING OR NOT MULTIWIFI_RUST_DAEMON)
+    add_library(multiwifi-core STATIC
+        src/core/config.c
+        src/core/operation.c
+        src/core/journal.c
+        src/core/netlink_route.c
+        src/core/routing_manager.c
+        src/core/load_balancer.c
+        src/core/firewall.c
+        src/core/bonding_protocol.c
+        src/core/tun_device.c
+        src/core/loop_prevention.c
+        src/core/bonding_client.c
+        src/daemon/service.c
+    )
+    target_link_libraries(multiwifi-core PUBLIC
+        multiwifi-gui-support
+        PkgConfig::POLKIT
+        PkgConfig::NFTABLES
+    )
+    target_include_directories(multiwifi-core PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+endif()
 
-# Unprivileged GTK4 GUI executable
+# Unprivileged GTK4 GUI executable (C11)
 add_executable(multiwifi-gui
     src/gui/main.c
     src/gui/window.c
@@ -86,25 +95,69 @@ target_link_libraries(multiwifi-gui PRIVATE
     PkgConfig::GTK4
 )
 
-# System Daemon executable
-add_executable(multiwifi-daemon
-    src/daemon/main.c
-)
-target_link_libraries(multiwifi-daemon PRIVATE
-    multiwifi-core
-)
+# Privileged System Daemon executable (Rust crate by default, or legacy C fallback)
+if(MULTIWIFI_RUST_DAEMON)
+    find_program(CARGO_EXECUTABLE cargo)
+    if(NOT CARGO_EXECUTABLE)
+        message(FATAL_ERROR "cargo executable not found. Install Rust toolchain or configure with -DMULTIWIFI_RUST_DAEMON=OFF.")
+    endif()
+
+    set(RUST_TARGET_DIR "${CMAKE_BINARY_DIR}/rust-target")
+    set(RUST_DAEMON_BIN "${RUST_TARGET_DIR}/release/multiwifi-daemon")
+    set(STAGED_DAEMON_BIN "${CMAKE_BINARY_DIR}/multiwifi-daemon")
+
+    file(GLOB_RECURSE MULTIWIFI_RUST_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/*.rs"
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/*/Cargo.toml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/multiwifi-core/build.rs"
+    )
+
+    add_custom_command(
+        OUTPUT "${STAGED_DAEMON_BIN}"
+        COMMAND "${CARGO_EXECUTABLE}" build
+            --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+            --package multiwifi-daemon
+            --release
+            --target-dir "${RUST_TARGET_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${RUST_DAEMON_BIN}" "${STAGED_DAEMON_BIN}"
+        BYPRODUCTS "${RUST_DAEMON_BIN}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+            ${MULTIWIFI_RUST_SOURCES}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Building Rust multiwifi-daemon (release)"
+        VERBATIM
+    )
+    add_custom_target(multiwifi-daemon-rust ALL DEPENDS "${STAGED_DAEMON_BIN}")
+else()
+    add_executable(multiwifi-daemon
+        src/daemon/main.c
+    )
+    target_link_libraries(multiwifi-daemon PRIVATE
+        multiwifi-core
+    )
+endif()
 
 # Tests
-include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
 # Installation rules
 include(GNUInstallDirs)
-install(TARGETS multiwifi-gui multiwifi-daemon
+install(TARGETS multiwifi-gui
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+if(MULTIWIFI_RUST_DAEMON)
+    install(PROGRAMS "${STAGED_DAEMON_BIN}"
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+else()
+    install(TARGETS multiwifi-daemon
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
 install(FILES data/io.github.multiwifi.MultiWiFi.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
