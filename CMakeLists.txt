@@ -33,14 +33,28 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Core library (pure logic, logging, capabilities, config parsing, Wi-Fi inventory, path monitor, D-Bus service, routing manager)
-add_library(multiwifi-core STATIC
+# Unprivileged GUI support library (no daemon/polkit/nftables code linked into GUI)
+add_library(multiwifi-gui-support STATIC
     src/core/logging.c
     src/core/capabilities.c
-    src/core/config.c
     src/core/wifi_device.c
     src/core/wifi_inventory.c
     src/core/path_monitor.c
+)
+target_link_libraries(multiwifi-gui-support PUBLIC
+    PkgConfig::GLIB
+    PkgConfig::GIO
+    PkgConfig::GIO_UNIX
+    PkgConfig::NM
+    m
+)
+target_include_directories(multiwifi-gui-support PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# Full core + daemon library (legacy C modules being migrated incrementally to crates/)
+add_library(multiwifi-core STATIC
+    src/core/config.c
     src/core/operation.c
     src/core/journal.c
     src/core/netlink_route.c
@@ -54,13 +68,9 @@ add_library(multiwifi-core STATIC
     src/daemon/service.c
 )
 target_link_libraries(multiwifi-core PUBLIC
-    PkgConfig::GLIB
-    PkgConfig::GIO
-    PkgConfig::GIO_UNIX
-    PkgConfig::NM
+    multiwifi-gui-support
     PkgConfig::POLKIT
     PkgConfig::NFTABLES
-    m
 )
 target_include_directories(multiwifi-core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -72,11 +82,11 @@ add_executable(multiwifi-gui
     src/gui/window.c
 )
 target_link_libraries(multiwifi-gui PRIVATE
-    multiwifi-core
+    multiwifi-gui-support
     PkgConfig::GTK4
 )
 
-# System Daemon stub executable
+# System Daemon executable
 add_executable(multiwifi-daemon
     src/daemon/main.c
 )

@@ -1,0 +1,27 @@
+[package]
+name = "multiwifi-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core networking, configuration, scheduling, protocol, and transaction modules for MultiWiFi"
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes = "1"
+futures-util = "0.3"
+libc = "0.2"
+nix = { version = "0.32", features = ["fs", "ioctl", "net", "process", "sched", "socket", "user"] }
+netlink-packet-route = "0.34"
+rtnetlink = "0.24"
+serde = { version = "1", features = ["derive"] }
+socket2 = { version = "0.6", features = ["all"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+toml = "0.8"
+zbus = { version = "6", default-features = false, features = ["proxy", "service", "tokio"] }
+
+[build-dependencies]
+pkg-config = "0.3"
