@@ -369,22 +369,81 @@ pub(crate) mod test_util {
     use std::io::Write;
     use std::net::{IpAddr, Ipv4Addr};
 
+    fn is_netlink_permission_error(err: &rtnetlink::Error) -> bool {
+        if let rtnetlink::Error::NetlinkError(nl_err) = err {
+            let code = nl_err.raw_code();
+            if code == -libc::EPERM
+                || code == libc::EPERM
+                || code == -libc::EACCES
+                || code == libc::EACCES
+            {
+                return true;
+            }
+        }
+        let msg = err.to_string();
+        msg.contains("Operation not permitted") || msg.contains("Permission denied")
+    }
+
     pub fn enter_isolated_netns() -> bool {
         let uid = nix::unistd::getuid();
         let gid = nix::unistd::getgid();
         if unshare(CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNET).is_err() {
             return false;
         }
-        if let Ok(mut f) = std::fs::File::create("/proc/self/setgroups") {
-            let _ = f.write_all(b"deny");
+        if std::fs::File::create("/proc/self/setgroups")
+            .and_then(|mut f| f.write_all(b"deny"))
+            .is_err()
+        {
+            return false;
         }
-        if let Ok(mut f) = std::fs::File::create("/proc/self/gid_map") {
-            let _ = writeln!(f, "0 {gid} 1");
+        if std::fs::File::create("/proc/self/gid_map")
+            .and_then(|mut f| writeln!(f, "0 {gid} 1"))
+            .is_err()
+        {
+            return false;
         }
-        if let Ok(mut f) = std::fs::File::create("/proc/self/uid_map") {
-            let _ = writeln!(f, "0 {uid} 1");
+        if std::fs::File::create("/proc/self/uid_map")
+            .and_then(|mut f| writeln!(f, "0 {uid} 1"))
+            .is_err()
+        {
+            return false;
         }
-        true
+
+        // Verify CAP_NET_ADMIN is usable inside the userns (Ubuntu 24.04 AppArmor may restrict it).
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return false;
+        };
+        rt.block_on(async {
+            let nl = match NetlinkSession::open() {
+                Ok(nl) => nl,
+                Err(super::NetlinkError::Io(ref io_err))
+                    if io_err.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
+                    return false;
+                }
+                Err(err) => panic!("open netlink for isolated netns probe: {err}"),
+            };
+            let lo_idx = iface_index("lo").expect("lo index");
+            match nl
+                .handle
+                .link()
+                .set(LinkUnspec::new_with_index(lo_idx).up().build())
+                .execute()
+                .await
+            {
+                Ok(()) => true,
+                Err(err) if is_netlink_permission_error(&err) => {
+                    eprintln!(
+                        "Skipping isolated netns test: unprivileged userns/CAP_NET_ADMIN denied ({err})"
+                    );
+                    false
+                }
+                Err(err) => panic!("bring lo up in isolated netns probe: {err}"),
+            }
+        })
     }
 
     pub async fn setup_loopback(addrs: &[(Ipv4Addr, u8)]) {
